@@ -43,11 +43,22 @@ npm install
 #   GRADING_MODEL=gpt-5.6-terra
 #   PROMPT_GEN_MODEL=gpt-5.6-terra
 #   IMAGE_PUSH_MODE=queue-only   (queue-only | queue-and-run | off)
+#   OPENAI_BASE_URL=https://api.openai.com/v1  (optional API/mock override)
 npm run dev
 ```
 
 Open http://localhost:3000 — pick a library prompt or generate one from a
 company/role briefing, then join with mic + speaker.
+
+## Testing
+
+```bash
+npm run check:pure      # deterministic logic checks
+npm run test:e2e:mock   # no-cost browser E2E against a local OpenAI mock
+npm run smoke:live      # real GPT-Live smoke test (paid/stateful)
+```
+
+The mocked E2E builds the app, starts a temporary production server and local OpenAI-compatible server, stubs the browser's WebRTC/microphone APIs with Playwright, and uses a temporary SQLite directory. It does not call OpenAI.
 
 ## Notes
 

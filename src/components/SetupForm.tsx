@@ -20,6 +20,8 @@ export default function SetupForm() {
   });
   const [durationSec, setDurationSec] = useState(45 * 60);
   const [customMin, setCustomMin] = useState("60");
+  const customMinutes = Number(customMin);
+  const customValid = Number.isInteger(customMinutes) && customMinutes >= 5 && customMinutes <= 120;
   const isCustom = !DURATIONS.includes(durationSec);
   const [generated, setGenerated] = useState<PromptSpec | null>(null);
   const [busy, setBusy] = useState<"gen" | "start" | null>(null);
@@ -68,7 +70,12 @@ export default function SetupForm() {
     }
   };
 
-  const canStart = mode === "library" || generated !== null;
+  const updateBriefing = (patch: Partial<Briefing>) => {
+    setBriefing((current) => ({ ...current, ...patch }));
+    setGenerated(null);
+  };
+
+  const canStart = (mode === "library" || generated !== null) && (!isCustom || customValid);
 
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6">
@@ -109,7 +116,7 @@ export default function SetupForm() {
             <Field label="Company (flavor)">
               <input
                 value={briefing.company}
-                onChange={(e) => setBriefing({ ...briefing, company: e.target.value })}
+                onChange={(e) => updateBriefing({ company: e.target.value })}
                 placeholder="e.g. Google"
                 className="input"
               />
@@ -117,7 +124,7 @@ export default function SetupForm() {
             <Field label="Position">
               <input
                 value={briefing.position}
-                onChange={(e) => setBriefing({ ...briefing, position: e.target.value })}
+                onChange={(e) => updateBriefing({ position: e.target.value })}
                 placeholder="e.g. Backend SWE"
                 className="input"
               />
@@ -125,7 +132,7 @@ export default function SetupForm() {
             <Field label="Level">
               <select
                 value={briefing.level}
-                onChange={(e) => setBriefing({ ...briefing, level: e.target.value })}
+                onChange={(e) => updateBriefing({ level: e.target.value })}
                 className="input"
               >
                 {LEVELS.map((l) => (
@@ -141,7 +148,7 @@ export default function SetupForm() {
             <Field label="Company">
               <input
                 value={briefing.company}
-                onChange={(e) => setBriefing({ ...briefing, company: e.target.value })}
+                onChange={(e) => updateBriefing({ company: e.target.value })}
                 placeholder="e.g. Stripe"
                 className="input"
               />
@@ -149,7 +156,7 @@ export default function SetupForm() {
             <Field label="Position">
               <input
                 value={briefing.position}
-                onChange={(e) => setBriefing({ ...briefing, position: e.target.value })}
+                onChange={(e) => updateBriefing({ position: e.target.value })}
                 placeholder="e.g. Backend engineer"
                 className="input"
               />
@@ -157,7 +164,7 @@ export default function SetupForm() {
             <Field label="Level">
               <select
                 value={briefing.level}
-                onChange={(e) => setBriefing({ ...briefing, level: e.target.value })}
+                onChange={(e) => updateBriefing({ level: e.target.value })}
                 className="input"
               >
                 {LEVELS.map((l) => (
@@ -169,7 +176,7 @@ export default function SetupForm() {
           <Field label="Job description (optional — paste for sharper prompts)">
             <textarea
               value={briefing.jobDescription}
-              onChange={(e) => setBriefing({ ...briefing, jobDescription: e.target.value })}
+              onChange={(e) => updateBriefing({ jobDescription: e.target.value })}
               rows={5}
               placeholder="Paste the job post…"
               className="input"
@@ -222,18 +229,20 @@ export default function SetupForm() {
               onChange={(e) => {
                 setCustomMin(e.target.value);
                 const m = Number(e.target.value);
-                if (Number.isFinite(m) && m >= 5 && m <= 120) setDurationSec(m * 60);
+                if (Number.isInteger(m) && m >= 5 && m <= 120) setDurationSec(m * 60);
               }}
               onFocus={() => {
-                const m = Number(customMin);
-                if (Number.isFinite(m) && m >= 5) setDurationSec(m * 60);
+                if (customValid) setDurationSec(customMinutes * 60);
               }}
               className="w-16 bg-transparent outline-none"
             />
             <span className="text-neutral-400">min custom</span>
           </div>
         </div>
-        {isCustom && Number(customMin) > 60 && (
+        {isCustom && !customValid && (
+          <p className="mt-1 text-xs text-amber-500">Custom length must be a whole number from 5 to 120 minutes.</p>
+        )}
+        {isCustom && customValid && customMinutes > 60 && (
           <p className="mt-1 text-xs text-amber-500">
             Sessions past ~60 min may hit the platform duration cap — an early end will
             auto-grade what was recorded.

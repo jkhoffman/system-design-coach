@@ -1,4 +1,4 @@
-import type { Briefing, PromptSpec, TimelineEvent, TranscriptTurn } from "./types";
+import type { Briefing, GradeReport, PromptSpec, TimelineEvent, TranscriptTurn } from "./types";
 
 export interface RubricDimension {
   key: string;
@@ -106,11 +106,13 @@ export function buildGradingInput(input: {
   briefing: Briefing;
   prompt: PromptSpec;
   durationSec: number;
+  elapsedSec?: number;
   transcript: TranscriptTurn[];
   timeline: TimelineEvent[];
 }): string {
-  const { briefing, prompt, durationSec, transcript, timeline } = input;
+  const { briefing, prompt, durationSec, elapsedSec, transcript, timeline } = input;
   const mins = Math.round(durationSec / 60);
+  const actualMins = elapsedSec == null ? mins : Math.max(1, Math.round(elapsedSec / 60));
 
   const transcriptText = transcript
     .map((t) => `[${fmtMs(t.startMs)}] ${t.speaker === "candidate" ? "CANDIDATE" : "INTERVIEWER"}: ${t.text}`)
@@ -125,9 +127,10 @@ export function buildGradingInput(input: {
     )
     .join("\n");
 
-  return `You are grading a ${mins}-minute system design interview for a ${briefing.level} ${briefing.position} candidate at ${briefing.company || "a large tech company"}.
+  return `You are grading a ${mins}-minute system design interview for a ${briefing.level} ${briefing.position} candidate at ${briefing.company || "a large tech company"}. The interview ran for approximately ${actualMins} minutes.
 
 QUESTION ASKED: "${prompt.question}"
+INTERVIEWER FACT SHEET / EXPECTED CONSTRAINTS: ${prompt.factSheet.map((f) => `${f.q} → ${f.a}`).join("; ")}
 EXPECTED ANGLES: ${prompt.deepDiveAngles.join("; ")}
 
 ${levelBar(briefing.level)}
@@ -159,13 +162,55 @@ export function fmtMs(ms: number): string {
   return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
+export function validateGradeReport(input: unknown): GradeReport {
+  const grade = input as GradeReport;
+  const expected = new Map(RUBRIC.map((d) => [d.key, d]));
+  if (!grade || typeof grade !== "object" || !Array.isArray(grade.dimensions)) {
+    throw new Error("grader returned malformed report");
+  }
+  if (grade.dimensions.length !== RUBRIC.length) {
+    throw new Error(`grader returned ${grade.dimensions.length} dimensions, expected ${RUBRIC.length}`);
+  }
+  let weighted = 0;
+  for (const dim of grade.dimensions) {
+    const rubric = expected.get(dim.key);
+    if (!rubric) throw new Error(`unexpected grading dimension: ${dim.key}`);
+    if (dim.label !== rubric.label) throw new Error(`incorrect label for grading dimension: ${dim.key}`);
+    if (Math.abs(dim.weight - rubric.weight) > 0.001) {
+      throw new Error(`incorrect weight for grading dimension: ${dim.key}`);
+    }
+    if (!Number.isFinite(dim.score) || dim.score < 1 || dim.score > 5) {
+      throw new Error(`invalid score for grading dimension: ${dim.key}`);
+    }
+    weighted += dim.score * rubric.weight;
+  }
+  if (new Set(grade.dimensions.map((d) => d.key)).size !== RUBRIC.length) {
+    throw new Error("grader returned duplicate dimensions");
+  }
+  if (
+    typeof grade.overall?.summary !== "string" ||
+    !["strong_no_hire", "no_hire", "lean_no_hire", "lean_hire", "hire", "strong_hire"].includes(
+      grade.overall?.signal
+    )
+  ) {
+    throw new Error("grader returned an invalid overall result");
+  }
+  return {
+    ...grade,
+    overall: {
+      ...grade.overall,
+      score: Math.round(weighted * 10) / 10,
+    },
+  };
+}
+
 export const GRADE_SCHEMA = {
   type: "object",
   properties: {
     overall: {
       type: "object",
       properties: {
-        score: { type: "number" },
+        score: { type: "number", minimum: 1, maximum: 5 },
         signal: {
           type: "string",
           enum: ["strong_no_hire", "no_hire", "lean_no_hire", "lean_hire", "hire", "strong_hire"],
@@ -177,12 +222,14 @@ export const GRADE_SCHEMA = {
     },
     dimensions: {
       type: "array",
+      minItems: 6,
+      maxItems: 6,
       items: {
         type: "object",
         properties: {
-          key: { type: "string" },
+          key: { type: "string", enum: ["scoping", "architecture", "depth", "tradeoffs", "communication", "pacing"] },
           label: { type: "string" },
-          score: { type: "number" },
+          score: { type: "number", minimum: 1, maximum: 5 },
           weight: { type: "number" },
           evidence: { type: "string" },
           moments: {

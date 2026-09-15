@@ -26,6 +26,9 @@ export interface PromptSpec {
 }
 
 export type Speaker = "candidate" | "interviewer";
+export type SessionStatus = "created" | "live" | "ended" | "graded";
+export type GradeStatus = "idle" | "running" | "done" | "failed";
+export type RecordingStatus = "idle" | "running" | "done" | "failed" | "unavailable";
 
 export interface TranscriptTurn {
   speaker: Speaker;
@@ -46,12 +49,16 @@ export interface SessionRow {
   briefing: Briefing;
   prompt: PromptSpec;
   durationSec: number;
-  status: "created" | "live" | "ended" | "graded";
+  status: SessionStatus;
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
   liveSessionId?: string;
   recordingPath?: string;
+  recordingStatus?: RecordingStatus;
+  recordingError?: string;
+  gradeStatus?: GradeStatus;
+  gradeError?: string;
   transcript: TranscriptTurn[];
   timeline: TimelineEvent[];
   finalScene?: unknown;
@@ -74,6 +81,38 @@ export interface TradeoffAuditEntry {
   alternativeStated: boolean;
   reasonStated: boolean;
   startMs: number | null;
+}
+
+export interface ClientSession {
+  id: string;
+  mode: Mode;
+  briefing: Omit<Briefing, "jobDescription">;
+  prompt: Omit<PromptSpec, "factSheet">;
+  durationSec: number;
+  status: SessionStatus;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  transcript: TranscriptTurn[];
+  timeline: TimelineEvent[];
+  finalImage?: string;
+  grade?: GradeReport;
+  gradeStatus?: GradeStatus;
+  gradeError?: string;
+  recordingStatus?: RecordingStatus;
+  recordingError?: string;
+  hasRecording: boolean;
+}
+
+export interface SessionSummary {
+  id: string;
+  title: string;
+  company: string;
+  level: string;
+  durationSec: number;
+  status: SessionStatus;
+  createdAt: number;
+  score?: number;
 }
 
 export interface GradeReport {

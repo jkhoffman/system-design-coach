@@ -1,10 +1,10 @@
 import Link from "next/link";
-import { listSessions } from "@/lib/db";
+import { listSessionSummaries } from "@/lib/db";
 
 export const dynamic = "force-dynamic";
 
 export default function HistoryPage() {
-  const sessions = listSessions();
+  const sessions = listSessionSummaries(50);
   return (
     <main className="mx-auto max-w-3xl px-4 py-10">
       <div className="mb-6 flex items-center justify-between">
@@ -27,15 +27,15 @@ export default function HistoryPage() {
             className="flex items-center justify-between rounded-lg border border-neutral-800 bg-neutral-900 p-4 hover:border-neutral-700"
           >
             <div>
-              <div className="font-medium">{s.prompt.title}</div>
+              <div className="font-medium">{s.title}</div>
               <div className="text-xs text-neutral-500">
-                {s.briefing.company || "—"} · {s.briefing.level} · {Math.round(s.durationSec / 60)}min ·{" "}
+                {s.company || "—"} · {s.level} · {Math.round(s.durationSec / 60)}min ·{" "}
                 {new Date(s.createdAt).toLocaleString()}
               </div>
             </div>
             <div className="text-right text-sm">
-              {s.grade ? (
-                <span className="text-emerald-400">{s.grade.overall.score.toFixed(1)} / 5</span>
+              {s.score != null ? (
+                <span className="text-emerald-400">{s.score.toFixed(1)} / 5</span>
               ) : (
                 <span className="text-neutral-500">{s.status}</span>
               )}

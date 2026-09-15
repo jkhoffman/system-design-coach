@@ -17,6 +17,8 @@ export interface ExcalidrawElementLike {
   startBinding?: { elementId: string } | null;
   endBinding?: { elementId: string } | null;
   text?: string;
+  startArrowhead?: string | null;
+  endArrowhead?: string | null;
 }
 
 /** Key used to detect real element changes (ignores selection/scroll appState). */
@@ -38,6 +40,7 @@ function trunc(s: string, n: number): string {
 
 const SHAPES = new Set(["rectangle", "ellipse", "diamond", "frame"]);
 const CONNECTORS = new Set(["arrow", "line"]);
+const directedArrowhead = (value?: string | null) => value != null && value !== "line";
 
 export function summarizeScene(elements: readonly ExcalidrawElementLike[], maxChars = 1800): string {
   const live = elements.filter((e) => !e.isDeleted);
@@ -101,7 +104,18 @@ export function summarizeScene(elements: readonly ExcalidrawElementLike[], maxCh
             .map((e) => {
               const s = e.startBinding ? label(byId.get(e.startBinding.elementId) ?? e) : "?";
               const t = e.endBinding ? label(byId.get(e.endBinding.elementId) ?? e) : "?";
-              return `${s} ${e.type === "arrow" ? "->" : "--"} ${t}`;
+              const connectorLabel = labelOf.get(e.id) ? ` "${trunc(labelOf.get(e.id)!, 24)}"` : "";
+              const hasStartArrow = directedArrowhead(e.startArrowhead);
+              const hasEndArrow = directedArrowhead(e.endArrowhead);
+              const flow =
+                hasStartArrow && hasEndArrow
+                  ? `${s} <-> ${t}`
+                  : hasStartArrow
+                    ? `${t} -> ${s}`
+                    : e.type === "arrow"
+                      ? `${s} -> ${t}`
+                      : `${s} -- ${t}`;
+              return flow + connectorLabel;
             })
             .join("; ")
         : "none")

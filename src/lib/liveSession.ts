@@ -24,7 +24,7 @@ export interface LiveTransport {
   sessionT0(): number | null;
   /** Server-selected image push strategy. */
   imagePushMode: string;
-  connect(): Promise<void>;
+  connect(signal?: AbortSignal): Promise<void>;
   sendThinking(content: string): void;
   sendInstructions(content: string): void;
   sendCommentary(content: string): void;
@@ -34,7 +34,7 @@ export interface LiveTransport {
   runBackendNow(): void;
   mute(): void;
   unmute(): void;
-  close(): Promise<void>;
+  close(graceful?: boolean): Promise<void>;
 }
 
 type LiveEvent = {
@@ -67,8 +67,12 @@ export class GptLiveTransport implements LiveTransport {
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
   private mic: MediaStream | null = null;
+  private audioEl: HTMLAudioElement | null = null;
   private t0: number | null = null;
   private pendingCalls = 0;
+  private closing = false;
+  private sessionStarted = false;
+  private endedNotified = false;
   imagePushMode = "queue-only";
 
   constructor(
@@ -80,59 +84,94 @@ export class GptLiveTransport implements LiveTransport {
     return this.t0;
   }
 
-  async connect(): Promise<void> {
-    this.ev.onStatus("connecting", "requesting microphone access");
-    this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+  private abortError(): DOMException {
+    return new DOMException("connection aborted", "AbortError");
+  }
 
-    this.ev.onStatus("connecting", "creating WebRTC offer");
-    const pc = new RTCPeerConnection();
-    this.pc = pc;
+  private assertActive(signal?: AbortSignal): void {
+    if (this.closing || signal?.aborted) throw this.abortError();
+  }
 
-    const audioEl = document.createElement("audio");
-    audioEl.autoplay = true;
-    pc.ontrack = (e) => {
-      audioEl.srcObject = e.streams[0];
-    };
+  async connect(signal?: AbortSignal): Promise<void> {
+    try {
+      this.assertActive(signal);
+      this.ev.onStatus("connecting", "requesting microphone access");
+      this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.assertActive(signal);
 
-    pc.addTrack(this.mic.getTracks()[0]);
+      this.ev.onStatus("connecting", "creating WebRTC offer");
+      const pc = new RTCPeerConnection();
+      this.pc = pc;
 
-    const dc = pc.createDataChannel("oai-events");
-    this.dc = dc;
-    dc.onmessage = (m) => this.handleMessage(m.data);
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    await new Promise<void>((resolve) => {
-      if (pc.iceGatheringState === "complete") return resolve();
-      const check = () => {
-        if (pc.iceGatheringState === "complete") {
-          pc.removeEventListener("icegatheringstatechange", check);
-          resolve();
+      const audioEl = document.createElement("audio");
+      audioEl.autoplay = true;
+      this.audioEl = audioEl;
+      pc.ontrack = (e) => {
+        audioEl.srcObject = e.streams[0];
+      };
+      pc.onconnectionstatechange = () => {
+        if (this.closing || !this.sessionStarted) return;
+        if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
+          this.notifyEnded(`connection ${pc.connectionState}`);
         }
       };
-      pc.addEventListener("icegatheringstatechange", check);
-      setTimeout(resolve, 3000); // don't hang on ICE trickle
-    });
 
-    this.ev.onStatus("connecting", "contacting interviewer");
-    const res = await fetch("/api/live/session", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sessionId: this.sessionDbId, sdp: pc.localDescription?.sdp }),
-    });
-    if (!res.ok) throw new Error(`live session create failed: ${res.status} ${await res.text()}`);
-    const data = (await res.json()) as {
-      sdp: string;
-      liveSessionId?: string;
-      imagePushMode?: string;
-    };
-    if (data.imagePushMode) this.imagePushMode = data.imagePushMode;
-    if (!data.sdp) throw new Error("no SDP answer from server");
-    await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+      pc.addTrack(this.mic.getTracks()[0]);
+
+      const dc = pc.createDataChannel("oai-events");
+      this.dc = dc;
+      dc.onmessage = (m) => this.handleMessage(m.data);
+      dc.onclose = () => {
+        if (!this.closing && this.sessionStarted) this.notifyEnded("connection lost");
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await new Promise<void>((resolve) => {
+        if (pc.iceGatheringState === "complete") return resolve();
+        const check = () => {
+          if (pc.iceGatheringState === "complete") {
+            pc.removeEventListener("icegatheringstatechange", check);
+            resolve();
+          }
+        };
+        pc.addEventListener("icegatheringstatechange", check);
+        setTimeout(resolve, 3000); // don't hang on ICE trickle
+      });
+      this.assertActive(signal);
+
+      this.ev.onStatus("connecting", "contacting interviewer");
+      const res = await fetch("/api/live/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: this.sessionDbId, sdp: pc.localDescription?.sdp }),
+        signal,
+      });
+      if (!res.ok) throw new Error(`live session create failed: ${res.status} ${await res.text()}`);
+      const data = (await res.json()) as {
+        sdp: string;
+        liveSessionId?: string;
+        imagePushMode?: string;
+      };
+      if (data.imagePushMode) this.imagePushMode = data.imagePushMode;
+      if (!data.sdp) throw new Error("no SDP answer from server");
+      this.assertActive(signal);
+      await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+      this.assertActive(signal);
+    } catch (err) {
+      await this.close(false);
+      throw err;
+    }
   }
 
   private send(obj: Record<string, unknown>): void {
     if (this.dc?.readyState === "open") this.dc.send(JSON.stringify(obj));
+  }
+
+  private notifyEnded(reason: string): void {
+    if (this.endedNotified) return;
+    this.endedNotified = true;
+    this.ev.onEnded(reason);
   }
 
   private handleMessage(raw: string): void {
@@ -146,6 +185,7 @@ export class GptLiveTransport implements LiveTransport {
     switch (ev.type) {
       case "session.started":
         this.t0 = performance.now();
+        this.sessionStarted = true;
         this.ev.onStarted(ev.session?.id ?? "");
         this.ev.onStatus("live");
         return;
@@ -176,7 +216,7 @@ export class GptLiveTransport implements LiveTransport {
         this.handleResponseEvent(ev);
         return;
       case "session.closed":
-        this.ev.onEnded(ev.reason ?? "closed");
+        this.notifyEnded(ev.reason ?? "closed");
         return;
       case "error":
         this.ev.onStatus("error", ev.error?.message ?? ev.message ?? "unknown error");
@@ -279,19 +319,35 @@ export class GptLiveTransport implements LiveTransport {
     this.send({ type: "session.input_audio.unmute", event_id: eid("unmute") });
   }
 
-  async close(): Promise<void> {
+  async close(graceful = true): Promise<void> {
+    if (this.closing) return;
+    this.closing = true;
     try {
       this.send({ type: "session.close", event_id: eid("close") });
     } catch {
       /* channel may already be down */
     }
     // Give the close a moment to finalize server-side, then tear down locally.
-    await new Promise((r) => setTimeout(r, 1500));
-    this.dc?.close();
-    this.pc?.close();
-    this.mic?.getTracks().forEach((t) => t.stop());
+    if (graceful && this.sessionStarted) await new Promise((r) => setTimeout(r, 1500));
+    const dc = this.dc;
+    const pc = this.pc;
+    const mic = this.mic;
+    const audioEl = this.audioEl;
     this.dc = null;
     this.pc = null;
     this.mic = null;
+    this.audioEl = null;
+    if (dc) {
+      dc.onmessage = null;
+      dc.onclose = null;
+      dc.close();
+    }
+    if (pc) {
+      pc.ontrack = null;
+      pc.onconnectionstatechange = null;
+      pc.close();
+    }
+    mic?.getTracks().forEach((t) => t.stop());
+    if (audioEl) audioEl.srcObject = null;
   }
 }

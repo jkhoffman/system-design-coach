@@ -1,17 +1,7 @@
-import OpenAI from "openai";
-import { z } from "zod";
+import { createOpenAIClient } from "./openai";
 import type { Briefing, PromptSpec } from "./types";
 import { newId } from "./db";
-
-const FactSheetEntry = z.object({ q: z.string(), a: z.string() });
-
-const PromptSpecSchema = z.object({
-  title: z.string(),
-  question: z.string(),
-  context: z.string(),
-  factSheet: z.array(FactSheetEntry).min(4),
-  deepDiveAngles: z.array(z.string()).min(2),
-});
+import { PromptSpecSchema } from "./schemas";
 
 const JSON_SCHEMA = {
   type: "object",
@@ -47,7 +37,7 @@ Rules:
 - Do not name internal company systems that aren't public knowledge; keep it plausible, not proprietary.`;
 
 export async function generatePromptSpec(briefing: Briefing): Promise<PromptSpec> {
-  const client = new OpenAI();
+  const client = createOpenAIClient();
   const jd = briefing.jobDescription?.trim();
   const input = [
     `Company: ${briefing.company}`,
@@ -73,6 +63,6 @@ export async function generatePromptSpec(briefing: Briefing): Promise<PromptSpec
     },
   });
 
-  const parsed = PromptSpecSchema.parse(JSON.parse(res.output_text));
+  const parsed = PromptSpecSchema.omit({ id: true }).parse(JSON.parse(res.output_text));
   return { id: `gen-${newId()}`, ...parsed };
 }

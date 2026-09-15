@@ -75,11 +75,14 @@ export class Timeline {
   }
 
   getEvents(): TimelineEvent[] {
-    return this.events;
+    return this.events
+      .map((event, index) => ({ event, index }))
+      .sort((a, b) => a.event.startMs - b.event.startMs || a.index - b.index)
+      .map(({ event }) => event);
   }
 
   getTranscript(): TranscriptTurn[] {
-    return this.events
+    return this.getEvents()
       .filter((e): e is Extract<TimelineEvent, { kind: "turn" }> => e.kind === "turn")
       .map((e) => ({ speaker: e.speaker, startMs: e.startMs, endMs: e.endMs, text: e.text }));
   }

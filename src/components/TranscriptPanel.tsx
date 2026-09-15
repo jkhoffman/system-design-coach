@@ -5,17 +5,30 @@ import type { TimelineEvent } from "@/lib/types";
 import { fmtMs } from "@/lib/rubric";
 
 export default function TranscriptPanel({ events }: { events: TimelineEvent[] }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const pinnedToBottom = useRef(true);
+
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [events.length]);
+    if (pinnedToBottom.current) endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [events]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
 
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-neutral-800 px-3 py-2 text-xs font-medium uppercase tracking-wide text-neutral-500">
         Live transcript
       </div>
-      <div className="flex-1 space-y-2 overflow-y-auto p-3 text-sm">
+      <div
+        ref={scrollRef}
+        onScroll={onScroll}
+        className="flex-1 space-y-2 overflow-y-auto p-3 text-sm"
+      >
         {events.length === 0 && (
           <p className="text-neutral-600">The conversation will appear here.</p>
         )}
