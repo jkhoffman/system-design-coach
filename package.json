@@ -9,7 +9,8 @@
     "lint": "eslint",
     "check:pure": "node scripts/check-pure.mjs",
     "test:e2e:mock": "npm run build && node scripts/e2e-mock.mjs",
-    "smoke:live": "node scripts/live-smoke.mjs"
+    "smoke:live": "node scripts/live-smoke.mjs",
+    "smoke:live:debug": "node scripts/live-smoke-debug.mjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",

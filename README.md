@@ -22,9 +22,9 @@ board timeline.
   and low reasoning effort for low-latency probes.
 - **Whiteboard awareness**: on each drawing pause (~4s), a compact structural
   summary (labeled shapes + arrow bindings) is pushed silently via
-  `session.thinking.append`, and a PNG snapshot is queued into the delegation
-  context via `response.item.create` (`IMAGE_PUSH_MODE` controls whether
-  `response.create` is also fired).
+  `session.thinking.append`. Capped PNG milestone snapshots are retained for
+  grading; a capped JPEG is sent to the delegated backend only when its
+  `view_whiteboard` tool requests a fresh look.
 - **Timeline**: transcript fragments (`session.input/output_transcript.delta`)
   are grouped into turns and merged with board summaries, phase markers, and
   snapshot references on the session's ms timeline.
@@ -60,9 +60,12 @@ company/role briefing, then join with mic + speaker.
 npm run check:pure      # deterministic logic checks
 npm run test:e2e:mock   # no-cost browser E2E against a local OpenAI mock
 npm run smoke:live      # real GPT-Live smoke test (paid/stateful)
+npm run smoke:live:debug # instrumented GPT-Live protocol probe (paid/stateful)
 ```
 
 The mocked E2E builds the app, starts a temporary production server and local OpenAI-compatible server, stubs the browser's WebRTC/microphone APIs with Playwright, and uses a temporary SQLite directory. It does not call OpenAI.
+
+The live debug smoke uses the real API. It records data-channel message order and byte sizes, verifies `response.completed` and `session.closed` arrive before teardown, draws a visual-only code, asserts the delegated backend reads that code from the image, and polls recording/grading to completion.
 
 ## Notes
 

@@ -61,25 +61,44 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
     return (excalidrawApi.current?.getSceneElements() ?? []) as unknown as ExcalidrawElementLike[];
   }, []);
 
-  const exportPngDataUrl = useCallback(async (): Promise<string | null> => {
-    const api = excalidrawApi.current;
-    if (!api) return null;
-    const els = api.getSceneElements().filter((e) => !e.isDeleted);
-    if (!els.length) return null;
-    const { exportToBlob } = await import("@excalidraw/excalidraw");
-    const blob = await exportToBlob({
-      elements: els,
-      appState: { exportWithDarkMode: true, exportBackground: true },
-      files: api.getFiles(),
-      mimeType: "image/png",
-    });
-    return await new Promise<string>((resolve, reject) => {
-      const r = new FileReader();
-      r.onload = () => resolve(r.result as string);
-      r.onerror = reject;
-      r.readAsDataURL(blob);
-    });
-  }, []);
+  const exportBoardDataUrl = useCallback(
+    async (opts: {
+      mimeType: "image/png" | "image/jpeg";
+      maxWidthOrHeight?: number;
+      quality?: number;
+    }): Promise<string | null> => {
+      const api = excalidrawApi.current;
+      if (!api) return null;
+      const els = api.getSceneElements().filter((e) => !e.isDeleted);
+      if (!els.length) return null;
+      const { exportToBlob } = await import("@excalidraw/excalidraw");
+      const blob = await exportToBlob({
+        elements: els,
+        appState: { exportWithDarkMode: true, exportBackground: true },
+        files: api.getFiles(),
+        mimeType: opts.mimeType,
+        maxWidthOrHeight: opts.maxWidthOrHeight,
+        quality: opts.quality,
+      });
+      return await new Promise<string>((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(r.result as string);
+        r.onerror = reject;
+        r.readAsDataURL(blob);
+      });
+    },
+    []
+  );
+
+  const exportPngDataUrl = useCallback(
+    () => exportBoardDataUrl({ mimeType: "image/png" }),
+    [exportBoardDataUrl]
+  );
+
+  const exportLiveImageDataUrl = useCallback(
+    () => exportBoardDataUrl({ mimeType: "image/jpeg", maxWidthOrHeight: 1024, quality: 0.85 }),
+    [exportBoardDataUrl]
+  );
 
   const { onWhiteboardChange, flushBoardUpdates } = useBoardSync({
     sessionId: session.id,
@@ -89,7 +108,6 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
     sessionMs,
     currentElements,
     exportPngDataUrl,
-    imagePushMode,
   });
 
   useInterviewCheckpoint({
@@ -238,9 +256,9 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
         if (name === "view_whiteboard") {
           const summary = summarizeScene(currentElements());
           // Queue a fresh image so the NEXT delegation sees the actual board.
-          const png = await exportPngDataUrl().catch(() => null);
-          if (png && imagePushMode.current !== "off") {
-            transport.current?.queueBoardImage(png, "requested via view_whiteboard");
+          const image = await exportLiveImageDataUrl().catch(() => null);
+          if (image && imagePushMode.current !== "off") {
+            transport.current?.queueBoardImage(image, "requested via view_whiteboard");
           }
           return JSON.stringify({ whiteboard: summary });
         }
@@ -266,7 +284,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
       setError(err instanceof Error ? err.message : String(err));
       setPhase("lobby");
     }
-  }, [phase, session.id, currentElements, exportPngDataUrl, endInterview]);
+  }, [phase, session.id, currentElements, exportLiveImageDataUrl, endInterview]);
 
   useEffect(() => {
     unmountedRef.current = false;

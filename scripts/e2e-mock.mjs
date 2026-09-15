@@ -190,11 +190,36 @@ async function runHappyPath(context, baseUrl, mock, pageErrors) {
   assert.equal(mock.counts.recordingGet, 1, "mock recording was not downloaded exactly once");
   assert.ok(stub.getUserMediaCalls >= 1, "mock microphone was not acquired");
   assert.ok(stub.boardSummaries >= 1, "board summary was not sent to the transport");
-  assert.ok(stub.boardImages >= 1, "board image was not queued to the transport");
+  assert.equal(stub.boardImages, 1, "routine board sync unexpectedly queued extra images");
   assert.ok(stub.toolCalls >= 1, "view_whiteboard tool call was not exercised");
   assert.ok(stub.toolResults >= 1, "view_whiteboard tool result was not returned");
   assert.ok(stub.peerConnectionsClosed >= 1, "peer connection was not closed");
   assert.ok(stub.micTracksStopped >= 1, "microphone track was not stopped");
+
+  const toolResultIndex = stub.sent.findIndex(
+    (message) => message.itemType === "function_call_output"
+  );
+  const imageIndex = stub.sent.findIndex(
+    (message, index) => index > toolResultIndex && message.hasImage
+  );
+  const backendRunIndex = stub.sent.findIndex(
+    (message, index) => index > imageIndex && message.type === "response.create"
+  );
+  assert.ok(toolResultIndex >= 0, "view_whiteboard tool result was not sent");
+  assert.ok(imageIndex > toolResultIndex, "board image was not sent after the tool result");
+  assert.ok(backendRunIndex > imageIndex, "backend run was not requested after the board image");
+  assert.ok(
+    stub.received.some((message) => message.innerType === "response.completed"),
+    "delegation did not complete through response.completed"
+  );
+  const closeIndex = stub.sent.findIndex((message) => message.type === "session.close");
+  const sessionClosed = stub.received.find((message) => message.type === "session.closed");
+  assert.ok(closeIndex >= 0, "session.close was not sent");
+  assert.ok(sessionClosed, "session.closed was not received");
+  assert.ok(
+    stub.peerClosedAt >= sessionClosed.at,
+    "peer connection closed before session.closed was acknowledged"
+  );
 
   await page.close();
 }

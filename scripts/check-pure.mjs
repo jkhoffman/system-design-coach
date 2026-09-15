@@ -44,6 +44,25 @@ assert.match(
   summarizeScene([...elements, connector({ startArrowhead: "arrow", endArrowhead: "arrow" })]),
   /#clie <-> #serv/
 );
+assert.match(
+  summarizeScene([
+    ...elements,
+    connector({
+      startBinding: null,
+      endBinding: null,
+      points: [[0, 0], [100, 0]],
+      startArrowhead: null,
+      endArrowhead: "arrow",
+    }),
+  ]),
+  /#clie -> #serv/
+);
+const labeledScene = summarizeScene([
+  ...elements,
+  { id: "label", type: "text", x: 20, y: 15, width: 60, height: 20, text: "Client" },
+]);
+assert.match(labeledScene, /rect "Client" @left/);
+assert.doesNotMatch(labeledScene, /LABELS:/);
 
 const timeline = new Timeline();
 timeline.addBoardSummary(1000, "board");

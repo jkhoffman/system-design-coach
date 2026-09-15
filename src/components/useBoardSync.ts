@@ -22,7 +22,6 @@ export function useBoardSync(input: {
   sessionMs: () => number;
   currentElements: () => ExcalidrawElementLike[];
   exportPngDataUrl: () => Promise<string | null>;
-  imagePushMode: Ref<string>;
 }) {
   const {
     sessionId,
@@ -32,7 +31,6 @@ export function useBoardSync(input: {
     sessionMs,
     currentElements,
     exportPngDataUrl,
-    imagePushMode,
   } = input;
   const lastVersionKey = useRef("");
   const pauseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -55,31 +53,29 @@ export function useBoardSync(input: {
     transport.current.sendThinking(`[whiteboard state at ${fmtMs(t)}]\n${summary}`);
     timeline.current.addBoardSummary(t, summary);
 
-    const png = await exportPngDataUrl().catch(() => null);
-    if (png && imagePushMode.current !== "off") {
-      transport.current.queueBoardImage(png, `t=${fmtMs(t)}`);
-      if (imagePushMode.current === "queue-and-run") transport.current.runBackendNow();
-    }
     if (
-      png &&
-      snapshotCount.current < MAX_SNAPSHOTS &&
-      t - lastSnapshotMs.current >= SNAPSHOT_MIN_GAP_MS
+      snapshotCount.current >= MAX_SNAPSHOTS ||
+      t - lastSnapshotMs.current < SNAPSHOT_MIN_GAP_MS
     ) {
-      lastSnapshotMs.current = t;
-      snapshotCount.current++;
-      const upload = (async () => {
-        const res = await fetch(`/api/sessions/${sessionId}/snapshot`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ startMs: t, label: "milestone", png }),
-        });
-        if (!res.ok) return;
-        const d = (await res.json()) as { file?: string };
-        if (d.file) timeline.current.addSnapshot(t, "milestone", d.file);
-      })();
-      trackTask(upload);
-      await upload.catch(() => {});
+      return;
     }
+
+    const png = await exportPngDataUrl().catch(() => null);
+    if (!png) return;
+    lastSnapshotMs.current = t;
+    snapshotCount.current++;
+    const upload = (async () => {
+      const res = await fetch(`/api/sessions/${sessionId}/snapshot`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ startMs: t, label: "milestone", png }),
+      });
+      if (!res.ok) return;
+      const d = (await res.json()) as { file?: string };
+      if (d.file) timeline.current.addSnapshot(t, "milestone", d.file);
+    })();
+    trackTask(upload);
+    await upload.catch(() => {});
   }, [
     sessionId,
     transport,
@@ -88,7 +84,6 @@ export function useBoardSync(input: {
     sessionMs,
     currentElements,
     exportPngDataUrl,
-    imagePushMode,
     trackTask,
   ]);
 

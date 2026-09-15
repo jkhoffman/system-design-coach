@@ -1,6 +1,6 @@
 /**
  * Compact structural summary of an Excalidraw scene for the interviewer model.
- * Budget: ~1,800 chars (~450 tokens) so it fits a single session.thinking.append.
+ * Budget: ~1,400 chars so it fits comfortably in a single session.thinking.append.
  */
 
 export interface ExcalidrawElementLike {
@@ -19,6 +19,7 @@ export interface ExcalidrawElementLike {
   text?: string;
   startArrowhead?: string | null;
   endArrowhead?: string | null;
+  points?: readonly (readonly [number, number])[];
 }
 
 /** Key used to detect real element changes (ignores selection/scroll appState). */
@@ -42,7 +43,7 @@ const SHAPES = new Set(["rectangle", "ellipse", "diamond", "frame"]);
 const CONNECTORS = new Set(["arrow", "line"]);
 const directedArrowhead = (value?: string | null) => value != null && value !== "line";
 
-export function summarizeScene(elements: readonly ExcalidrawElementLike[], maxChars = 1800): string {
+export function summarizeScene(elements: readonly ExcalidrawElementLike[], maxChars = 1400): string {
   const live = elements.filter((e) => !e.isDeleted);
   if (live.length === 0) return "Whiteboard is empty.";
 
@@ -64,25 +65,72 @@ export function summarizeScene(elements: readonly ExcalidrawElementLike[], maxCh
   };
 
   const byId = new Map(live.map((e) => [e.id, e]));
+  const shapes = live
+    .filter((e) => SHAPES.has(e.type))
+    .sort((a, b) => a.y - b.y || a.x - b.x);
 
-  // Bound text: text elements with containerId belong to their shape's label
+  const contains = (e: ExcalidrawElementLike, x: number, y: number, padding: number) => {
+    const left = Math.min(e.x, e.x + e.width) - padding;
+    const right = Math.max(e.x, e.x + e.width) + padding;
+    const top = Math.min(e.y, e.y + e.height) - padding;
+    const bottom = Math.max(e.y, e.y + e.height) + padding;
+    return x >= left && x <= right && y >= top && y <= bottom;
+  };
+  const shapeAt = (x: number, y: number, padding = 16) => {
+    let best: ExcalidrawElementLike | null = null;
+    let bestArea = Infinity;
+    for (const shape of shapes) {
+      if (!contains(shape, x, y, padding)) continue;
+      const area = (Math.abs(shape.width) + padding * 2) * (Math.abs(shape.height) + padding * 2);
+      if (area < bestArea) {
+        best = shape;
+        bestArea = area;
+      }
+    }
+    return best;
+  };
+
+  // Bound text belongs to its container; free text inside a shape labels it too.
   const labelOf = new Map<string, string>();
+  const addLabel = (id: string, text: string) => {
+    const prev = labelOf.get(id);
+    labelOf.set(id, prev ? `${prev} ${text}` : text);
+  };
   const freeTexts: ExcalidrawElementLike[] = [];
   for (const e of live) {
     if (e.type !== "text" || !e.text?.trim()) continue;
     if (e.containerId && byId.has(e.containerId)) {
-      const prev = labelOf.get(e.containerId);
-      labelOf.set(e.containerId, prev ? `${prev} ${e.text}` : e.text);
-    } else {
-      freeTexts.push(e);
+      addLabel(e.containerId, e.text);
+      continue;
     }
+    const host = shapeAt(e.x + e.width / 2, e.y + e.height / 2);
+    if (host) addLabel(host.id, e.text);
+    else freeTexts.push(e);
   }
   const label = (e: ExcalidrawElementLike) =>
     labelOf.get(e.id) ? `"${trunc(labelOf.get(e.id)!, 24)}"` : `#${shortId(e.id)}`;
 
-  const shapes = live
-    .filter((e) => SHAPES.has(e.type))
-    .sort((a, b) => a.y - b.y || a.x - b.x);
+  const connectorPoint = (e: ExcalidrawElementLike, end: "start" | "end") => {
+    const point = e.points?.length
+      ? end === "start"
+        ? e.points[0]
+        : e.points[e.points.length - 1]
+      : end === "start"
+        ? ([0, 0] as const)
+        : ([e.width, e.height] as const);
+    return { x: e.x + point[0], y: e.y + point[1] };
+  };
+  const endpointElement = (
+    e: ExcalidrawElementLike,
+    binding: { elementId: string } | null | undefined,
+    end: "start" | "end"
+  ) => {
+    const bound = binding ? byId.get(binding.elementId) : undefined;
+    if (bound && SHAPES.has(bound.type)) return bound;
+    const point = connectorPoint(e, end);
+    return shapeAt(point.x, point.y);
+  };
+
   const connectors = live.filter((e) => CONNECTORS.has(e.type));
   const other = live.filter((e) => !SHAPES.has(e.type) && !CONNECTORS.has(e.type) && e.type !== "text");
 
@@ -102,8 +150,10 @@ export function summarizeScene(elements: readonly ExcalidrawElementLike[], maxCh
       (connectors.length
         ? connectors
             .map((e) => {
-              const s = e.startBinding ? label(byId.get(e.startBinding.elementId) ?? e) : "?";
-              const t = e.endBinding ? label(byId.get(e.endBinding.elementId) ?? e) : "?";
+              const source = endpointElement(e, e.startBinding, "start");
+              const target = endpointElement(e, e.endBinding, "end");
+              const s = source ? label(source) : "?";
+              const t = target ? label(target) : "?";
               const connectorLabel = labelOf.get(e.id) ? ` "${trunc(labelOf.get(e.id)!, 24)}"` : "";
               const hasStartArrow = directedArrowhead(e.startArrowhead);
               const hasEndArrow = directedArrowhead(e.endArrowhead);

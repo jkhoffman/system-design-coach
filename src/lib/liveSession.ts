@@ -28,7 +28,7 @@ export interface LiveTransport {
   sendThinking(content: string): void;
   sendInstructions(content: string): void;
   sendCommentary(content: string): void;
-  /** Queue a whiteboard PNG into the delegation context (data URL). */
+  /** Queue a compact whiteboard image into the delegation context (data URL). */
   queueBoardImage(dataUrl: string, note: string): void;
   /** Fire response.create so queued items are consumed now. */
   runBackendNow(): void;
@@ -70,9 +70,14 @@ export class GptLiveTransport implements LiveTransport {
   private audioEl: HTMLAudioElement | null = null;
   private t0: number | null = null;
   private pendingCalls = 0;
+  private toolCallDepth = 0;
+  private queuedBoardImages: { dataUrl: string; note: string }[] = [];
   private closing = false;
   private sessionStarted = false;
+  private sessionClosed = false;
   private endedNotified = false;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private closeWaiter: (() => void) | null = null;
   imagePushMode = "queue-only";
 
   constructor(
@@ -96,7 +101,9 @@ export class GptLiveTransport implements LiveTransport {
     try {
       this.assertActive(signal);
       this.ev.onStatus("connecting", "requesting microphone access");
-      this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
+      this.mic = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true },
+      });
       this.assertActive(signal);
 
       this.ev.onStatus("connecting", "creating WebRTC offer");
@@ -111,7 +118,18 @@ export class GptLiveTransport implements LiveTransport {
       };
       pc.onconnectionstatechange = () => {
         if (this.closing || !this.sessionStarted) return;
-        if (pc.connectionState === "failed" || pc.connectionState === "disconnected" || pc.connectionState === "closed") {
+        if (pc.connectionState === "disconnected") {
+          this.disconnectTimer ??= setTimeout(() => {
+            this.disconnectTimer = null;
+            if (!this.closing && pc.connectionState === "disconnected") {
+              this.notifyEnded("connection disconnected");
+            }
+          }, 12_000);
+          return;
+        }
+        this.clearDisconnectTimer();
+        if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+          this.resolveCloseWaiter();
           this.notifyEnded(`connection ${pc.connectionState}`);
         }
       };
@@ -122,7 +140,11 @@ export class GptLiveTransport implements LiveTransport {
       this.dc = dc;
       dc.onmessage = (m) => this.handleMessage(m.data);
       dc.onclose = () => {
-        if (!this.closing && this.sessionStarted) this.notifyEnded("connection lost");
+        if (this.closing) {
+          this.resolveCloseWaiter();
+        } else if (this.sessionStarted) {
+          this.notifyEnded("connection lost");
+        }
       };
 
       const offer = await pc.createOffer();
@@ -164,12 +186,45 @@ export class GptLiveTransport implements LiveTransport {
     }
   }
 
-  private send(obj: Record<string, unknown>): void {
-    if (this.dc?.readyState === "open") this.dc.send(JSON.stringify(obj));
+  private clearDisconnectTimer(): void {
+    if (this.disconnectTimer) clearTimeout(this.disconnectTimer);
+    this.disconnectTimer = null;
+  }
+
+  private resolveCloseWaiter(): void {
+    const resolve = this.closeWaiter;
+    this.closeWaiter = null;
+    resolve?.();
+  }
+
+  private send(obj: Record<string, unknown>): boolean {
+    const dc = this.dc;
+    if (dc?.readyState !== "open") {
+      console.warn(`[live] dropped ${String(obj.type)}; data channel is ${dc?.readyState ?? "missing"}`);
+      return false;
+    }
+    const raw = JSON.stringify(obj);
+    const bytes = new TextEncoder().encode(raw).length;
+    const negotiatedMax = this.pc?.sctp?.maxMessageSize;
+    const maxMessageSize = negotiatedMax && negotiatedMax > 0 ? negotiatedMax : 64 * 1024;
+    if (bytes > maxMessageSize) {
+      console.warn(
+        `[live] dropped oversized ${String(obj.type)} message (${bytes} bytes > ${maxMessageSize} bytes)`
+      );
+      return false;
+    }
+    try {
+      dc.send(raw);
+      return true;
+    } catch (err) {
+      console.warn(`[live] failed to send ${String(obj.type)}`, err);
+      return false;
+    }
   }
 
   private notifyEnded(reason: string): void {
     if (this.endedNotified) return;
+    this.clearDisconnectTimer();
     this.endedNotified = true;
     this.ev.onEnded(reason);
   }
@@ -209,13 +264,15 @@ export class GptLiveTransport implements LiveTransport {
         this.ev.onStatus("thinking");
         return;
       case "session.delegation.completed":
-        this.pendingCalls = Math.max(0, this.pendingCalls - 1);
-        if (this.pendingCalls === 0) this.ev.onStatus("live");
+      case "response.completed":
+        this.delegationCompleted();
         return;
       case "response.event":
         this.handleResponseEvent(ev);
         return;
       case "session.closed":
+        this.sessionClosed = true;
+        this.resolveCloseWaiter();
         this.notifyEnded(ev.reason ?? "closed");
         return;
       case "error":
@@ -226,8 +283,17 @@ export class GptLiveTransport implements LiveTransport {
     }
   }
 
+  private delegationCompleted(): void {
+    this.pendingCalls = Math.max(0, this.pendingCalls - 1);
+    if (this.pendingCalls === 0) this.ev.onStatus("live");
+  }
+
   private handleResponseEvent(ev: LiveEvent): void {
     const inner = ev.event;
+    if (inner?.type === "response.completed") {
+      this.delegationCompleted();
+      return;
+    }
     if (inner?.type !== "response.output_item.done") return;
     const item = inner.item;
     if (item?.type !== "function_call" || !item.call_id || !item.name) return;
@@ -241,6 +307,7 @@ export class GptLiveTransport implements LiveTransport {
     }
 
     void (async () => {
+      this.toolCallDepth++;
       try {
         const output = await this.ev.onToolCall(item.name!, args);
         this.send({
@@ -259,7 +326,9 @@ export class GptLiveTransport implements LiveTransport {
           },
         });
       } finally {
-        // Appending a function result does not auto-continue; must create.
+        this.toolCallDepth--;
+        this.flushQueuedBoardImages();
+        // Appending function results/images does not auto-continue; must create.
         this.send({ type: "response.create", event_id: eid("continue") });
       }
     })();
@@ -293,7 +362,20 @@ export class GptLiveTransport implements LiveTransport {
   }
 
   queueBoardImage(dataUrl: string, note: string): void {
-    this.send({
+    if (this.toolCallDepth > 0) {
+      this.queuedBoardImages.push({ dataUrl, note });
+      return;
+    }
+    this.sendBoardImage(dataUrl, note);
+  }
+
+  private flushQueuedBoardImages(): void {
+    const pending = this.queuedBoardImages.splice(0);
+    for (const image of pending) this.sendBoardImage(image.dataUrl, image.note);
+  }
+
+  private sendBoardImage(dataUrl: string, note: string): void {
+    const sent = this.send({
       type: "response.item.create",
       event_id: eid("img"),
       item: {
@@ -305,6 +387,9 @@ export class GptLiveTransport implements LiveTransport {
         ],
       },
     });
+    if (!sent) {
+      this.sendThinking(`[whiteboard image unavailable — ${note}; use the latest structural summary]`);
+    }
   }
 
   runBackendNow(): void {
@@ -322,13 +407,19 @@ export class GptLiveTransport implements LiveTransport {
   async close(graceful = true): Promise<void> {
     if (this.closing) return;
     this.closing = true;
-    try {
-      this.send({ type: "session.close", event_id: eid("close") });
-    } catch {
-      /* channel may already be down */
+    this.clearDisconnectTimer();
+    const closeSent = !this.sessionClosed && this.send({ type: "session.close", event_id: eid("close") });
+    if (graceful && closeSent && this.sessionStarted && !this.sessionClosed) {
+      const acknowledged = new Promise<void>((resolve) => {
+        this.closeWaiter = resolve;
+      });
+      const timedOut = await Promise.race([
+        acknowledged.then(() => false),
+        new Promise<true>((resolve) => setTimeout(() => resolve(true), 10_000)),
+      ]);
+      this.closeWaiter = null;
+      if (timedOut) console.warn("[live] timed out waiting for session.closed");
     }
-    // Give the close a moment to finalize server-side, then tear down locally.
-    if (graceful && this.sessionStarted) await new Promise((r) => setTimeout(r, 1500));
     const dc = this.dc;
     const pc = this.pc;
     const mic = this.mic;

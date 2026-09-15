@@ -14,7 +14,10 @@ export function installLiveBrowserStub() {
     instructions: 0,
     closeRequests: 0,
     peerConnectionsClosed: 0,
+    peerClosedAt: 0,
     remoteDescriptions: [],
+    sent: [],
+    received: [],
   };
   Object.defineProperty(window, "__liveStub", { value: state, configurable: true });
 
@@ -72,6 +75,11 @@ export function installLiveBrowserStub() {
 
     emit(event) {
       queueMicrotask(() => {
+        state.received.push({
+          type: event.type,
+          innerType: event.event?.type,
+          at: performance.now(),
+        });
         if (this.onmessage) this.onmessage({ data: JSON.stringify(event) });
       });
     }
@@ -92,7 +100,16 @@ export function installLiveBrowserStub() {
       if (this.readyState === "closed") return;
       state.sends++;
       const message = JSON.parse(raw);
+      const content = message.item?.content;
       state.sentTypes.push(message.type);
+      state.sent.push({
+        type: message.type,
+        itemType: message.item?.type,
+        hasImage:
+          Array.isArray(content) && content.some((part) => part?.type === "input_image"),
+        bytes: new TextEncoder().encode(raw).length,
+        at: performance.now(),
+      });
 
       if (message.type === "session.commentary.append") {
         this.emitTranscript(
@@ -157,7 +174,7 @@ export function installLiveBrowserStub() {
       if (message.type === "response.create") {
         state.backendRuns++;
         if (state.boardSummaries > 0) {
-          this.emit({ type: "session.delegation.completed" });
+          this.emit({ type: "response.event", event: { type: "response.completed" } });
           this.emitTranscript(
             "interviewer",
             "I can see the client feeding the API layer; tell me how the write path handles duplicates.",
@@ -186,6 +203,7 @@ export function installLiveBrowserStub() {
 
       if (message.type === "session.close") {
         state.closeRequests++;
+        this.emit({ type: "session.closed", reason: "ended" });
       }
     }
 
@@ -207,6 +225,7 @@ export function installLiveBrowserStub() {
       this.ontrack = null;
       this.onconnectionstatechange = null;
       this.signalingState = "stable";
+      this.sctp = { maxMessageSize: 256 * 1024 };
     }
 
     createDataChannel(label) {
@@ -242,6 +261,7 @@ export function installLiveBrowserStub() {
       if (this.connectionState === "closed") return;
       this.connectionState = "closed";
       state.peerConnectionsClosed++;
+      state.peerClosedAt = performance.now();
       this.dataChannel?.close();
       if (this.onconnectionstatechange) this.onconnectionstatechange();
     }
