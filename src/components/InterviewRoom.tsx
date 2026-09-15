@@ -300,7 +300,7 @@ export default function InterviewRoom({ session }: { session: SessionRow }) {
         <main className="relative flex-1">
           <Whiteboard onApi={(api) => (excalidrawApi.current = api)} onChange={onWhiteboardChange} />
           {phase === "lobby" || phase === "connecting" ? (
-            <div className="absolute inset-0 grid place-items-center bg-neutral-950/90">
+            <div className="absolute inset-0 z-[9999] grid place-items-center bg-neutral-950/90">
               <div className="max-w-md rounded-xl border border-neutral-800 bg-neutral-900 p-6 text-center">
                 <h2 className="mb-2 text-lg font-semibold">Mock interview ready</h2>
                 <p className="mb-4 text-sm text-neutral-400">
@@ -322,7 +322,7 @@ export default function InterviewRoom({ session }: { session: SessionRow }) {
             </div>
           ) : null}
           {phase === "ending" && (
-            <div className="absolute inset-0 grid place-items-center bg-neutral-950/80">
+            <div className="absolute inset-0 z-[9999] grid place-items-center bg-neutral-950/80">
               <p className="text-neutral-300">Wrapping up — generating feedback…</p>
             </div>
           )}
