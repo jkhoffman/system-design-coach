@@ -6,7 +6,7 @@ import { PROMPT_LIBRARY } from "@/lib/prompts";
 import type { Briefing, PromptSpec } from "@/lib/types";
 
 const LEVELS = ["L4", "L5", "L6", "Staff"];
-const DURATIONS = [20 * 60, 30 * 60, 45 * 60, 60 * 60];
+const DURATIONS = [20 * 60, 30 * 60, 45 * 60];
 
 export default function SetupForm() {
   const router = useRouter();
@@ -19,6 +19,8 @@ export default function SetupForm() {
     jobDescription: "",
   });
   const [durationSec, setDurationSec] = useState(45 * 60);
+  const [customMin, setCustomMin] = useState("60");
+  const isCustom = !DURATIONS.includes(durationSec);
   const [generated, setGenerated] = useState<PromptSpec | null>(null);
   const [busy, setBusy] = useState<"gen" | "start" | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -191,7 +193,7 @@ export default function SetupForm() {
       )}
 
       <Field label="Interview length">
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           {DURATIONS.map((d) => (
             <button
               key={d}
@@ -202,10 +204,41 @@ export default function SetupForm() {
                   : "border-neutral-800 hover:border-neutral-700"
               }`}
             >
-              {d / 60} min{d === 3600 ? " (exp.)" : ""}
+              {d / 60} min
             </button>
           ))}
+          <div
+            className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${
+              isCustom
+                ? "border-emerald-600 bg-emerald-950/40"
+                : "border-neutral-800"
+            }`}
+          >
+            <input
+              type="number"
+              min={5}
+              max={120}
+              value={customMin}
+              onChange={(e) => {
+                setCustomMin(e.target.value);
+                const m = Number(e.target.value);
+                if (Number.isFinite(m) && m >= 5 && m <= 120) setDurationSec(m * 60);
+              }}
+              onFocus={() => {
+                const m = Number(customMin);
+                if (Number.isFinite(m) && m >= 5) setDurationSec(m * 60);
+              }}
+              className="w-16 bg-transparent outline-none"
+            />
+            <span className="text-neutral-400">min custom</span>
+          </div>
         </div>
+        {isCustom && Number(customMin) > 60 && (
+          <p className="mt-1 text-xs text-amber-500">
+            Sessions past ~60 min may hit the platform duration cap — an early end will
+            auto-grade what was recorded.
+          </p>
+        )}
       </Field>
 
       <button
