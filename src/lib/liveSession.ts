@@ -81,9 +81,10 @@ export class GptLiveTransport implements LiveTransport {
   }
 
   async connect(): Promise<void> {
-    this.ev.onStatus("connecting");
+    this.ev.onStatus("connecting", "requesting microphone access");
     this.mic = await navigator.mediaDevices.getUserMedia({ audio: true });
 
+    this.ev.onStatus("connecting", "creating WebRTC offer");
     const pc = new RTCPeerConnection();
     this.pc = pc;
 
@@ -113,6 +114,7 @@ export class GptLiveTransport implements LiveTransport {
       setTimeout(resolve, 3000); // don't hang on ICE trickle
     });
 
+    this.ev.onStatus("connecting", "contacting interviewer");
     const res = await fetch("/api/live/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

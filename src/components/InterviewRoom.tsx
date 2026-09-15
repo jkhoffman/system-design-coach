@@ -314,8 +314,10 @@ export default function InterviewRoom({ session }: { session: SessionRow }) {
                 >
                   {phase === "connecting" ? "Connecting…" : "Join interview"}
                 </button>
+                {phase === "connecting" && statusDetail && (
+                  <p className="mt-3 text-xs text-neutral-400">{statusDetail}…</p>
+                )}
                 {error && <p className="mt-3 text-sm text-red-400">{error}</p>}
-                {statusDetail && <p className="mt-3 text-xs text-neutral-500">{statusDetail}</p>}
               </div>
             </div>
           ) : null}
