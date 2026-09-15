@@ -1,36 +1,58 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Mock System Design Interviewer
 
-## Getting Started
+A voice-driven mock system design interview app. You draw on an Excalidraw
+whiteboard while a GPT-Live-1 interviewer runs the session — delivers the
+prompt, answers clarifying questions from a hidden fact sheet, probes your
+design, and wraps on time. Afterwards you get a timestamped scorecard graded
+against a FAANG-style rubric, the call recording, and a replayable transcript +
+board timeline.
 
-First, run the development server:
+## How it works
+
+- **Voice**: `gpt-live-1` over WebRTC. The browser sends an SDP offer to
+  `POST /api/live/session`, which attaches the interviewer persona + fact sheet
+  and forwards to `POST /v1/live/sessions` — the API key never leaves the server.
+- **Interviewer brain**: the fact sheet lives in the live model's instructions
+  (clarifying questions get instant answers). Deeper reasoning is delegated to a
+  Responses model (`delegation.type: "responses"`) with a `view_whiteboard` tool
+  and low reasoning effort for low-latency probes.
+- **Whiteboard awareness**: on each drawing pause (~4s), a compact structural
+  summary (labeled shapes + arrow bindings) is pushed silently via
+  `session.thinking.append`, and a PNG snapshot is queued into the delegation
+  context via `response.item.create` (`IMAGE_PUSH_MODE` controls whether
+  `response.create` is also fired).
+- **Timeline**: transcript fragments (`session.input/output_transcript.delta`)
+  are grouped into turns and merged with board summaries, phase markers, and
+  snapshot references on the session's ms timeline.
+- **Recording**: sessions are created with `store: true`; the stereo WAV
+  (candidate left / interviewer right) is downloaded after the interview and
+  served on the review page.
+- **Grading**: a vision-capable Responses model gets the rubric, the transcript,
+  the board timeline, and milestone PNGs, and returns a structured scorecard
+  including a mechanical trade-off audit (every architectural choice → was an
+  alternative + reason stated?).
+
+## Setup
 
 ```bash
+npm install
+# create .env with:
+#   OPENAI_API_KEY=sk-...        (project needs GPT-Live access + session storage enabled)
+#   LIVE_MODEL=gpt-live-1        (optional)
+#   LIVE_BACKEND_MODEL=gpt-5.6-terra
+#   GRADING_MODEL=gpt-5.6-terra
+#   PROMPT_GEN_MODEL=gpt-5.6-terra
+#   IMAGE_PUSH_MODE=queue-only   (queue-only | queue-and-run | off)
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open http://localhost:3000 — pick a library prompt or generate one from a
+company/role briefing, then join with mic + speaker.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Notes
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Cost: ~$0.05/min for the voice layer (~$2.25 for 45 min) + backend/grading tokens.
+- SQLite lives at `data/app.db`; snapshots and recordings under `data/`.
+- Recordings require session storage enabled on the OpenAI project and expire in 30 days.
+- 60-minute sessions are marked experimental — the Live duration cap is unverified
+  (the old Realtime cap was 60 min); an `expired` close auto-ends and grades the session.
