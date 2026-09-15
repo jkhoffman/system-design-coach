@@ -7,6 +7,10 @@ design, and wraps on time. Afterwards you get a timestamped scorecard graded
 against a FAANG-style rubric, the call recording, and a replayable transcript +
 board timeline.
 
+## Demo
+
+![Mock system design interview setup](docs/demo.png)
+
 ## How it works
 
 - **Voice**: `gpt-live-1` over WebRTC. The browser sends an SDP offer to
