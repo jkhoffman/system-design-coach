@@ -23,14 +23,32 @@ export async function POST(request: Request) {
     durationSec: row.durationSec,
   });
 
-  const res = await fetch("https://api.openai.com/v1/live/sessions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ session, transport: { type: "webrtc", sdp: body.sdp } }),
-  });
+  const create = (cfg: Record<string, unknown>) =>
+    fetch("https://api.openai.com/v1/live/sessions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ session: cfg, transport: { type: "webrtc", sdp: body.sdp } }),
+    });
+
+  let res = await create(session);
+  // Projects without data-persistence permission reject store:true — retry
+  // without it and flag the row so the review page knows no recording exists.
+  if (!res.ok) {
+    const errText = await res.text();
+    if (errText.includes("session_storage_not_allowed")) {
+      const { store: _store, ...noStore } = session;
+      res = await create(noStore);
+      updateSession(row.id, { recordingPath: "" });
+    } else {
+      return Response.json(
+        { error: `OpenAI live session failed: ${res.status}`, detail: errText },
+        { status: 502 }
+      );
+    }
+  }
 
   if (!res.ok) {
     const text = await res.text();

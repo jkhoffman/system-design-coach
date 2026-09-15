@@ -146,7 +146,14 @@ export default function InterviewRoom({ session }: { session: SessionRow }) {
       }).catch(() => {});
 
       // Fetch recording + grade in the background; review page waits on grade.
-      void fetch(`/api/sessions/${session.id}/recording`, { method: "POST" }).catch(() => {});
+      // Re-read the row: live/session may have cleared recordingPath when the
+      // project disallows session storage.
+      const fresh = await fetch(`/api/sessions/${session.id}`)
+        .then((r) => r.json())
+        .catch(() => null);
+      if (fresh?.session?.recordingPath !== "") {
+        void fetch(`/api/sessions/${session.id}/recording`, { method: "POST" }).catch(() => {});
+      }
       void fetch(`/api/sessions/${session.id}/grade`, { method: "POST" }).catch(() => {});
       setPhase("ended");
       router.push(`/interview/${session.id}/review`);
@@ -174,6 +181,10 @@ export default function InterviewRoom({ session }: { session: SessionRow }) {
       onStarted(liveSessionId) {
         t0.current = performance.now();
         tl.addMarker(0, `interview started (live session ${liveSessionId || "?"})`);
+        // Full-duplex models wait for the user to speak — kick the greeting.
+        t.sendCommentary(
+          "The candidate has just joined the call. Greet them briefly and deliver the interview question now."
+        );
       },
       onTranscript(speaker, delta, startMs, endMs) {
         tl.addTranscriptFragment(speaker, delta, startMs, endMs);

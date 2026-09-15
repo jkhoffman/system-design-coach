@@ -12,6 +12,9 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   if (!row.liveSessionId) {
     return Response.json({ error: "no live session id recorded" }, { status: 400 });
   }
+  if (row.recordingPath === "") {
+    return Response.json({ error: "session storage not permitted on project" }, { status: 400 });
+  }
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "OPENAI_API_KEY not set" }, { status: 503 });
   }
