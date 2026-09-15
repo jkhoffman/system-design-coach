@@ -9,7 +9,7 @@ board timeline.
 
 ## Demo
 
-![Mock system design interview setup](docs/demo.png)
+![Mock system design interview demo](docs/demo.gif)
 
 ## How it works
 
