@@ -273,7 +273,7 @@ async function main() {
         LIVE_MODEL: "mock-live",
         LIVE_BACKEND_MODEL: "mock-backend",
         PROMPT_GEN_MODEL: "mock-prompt-gen",
-        IMAGE_PUSH_MODE: "queue-and-run",
+        IMAGE_PUSH_MODE: "on",
         NEXT_TELEMETRY_DISABLED: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],

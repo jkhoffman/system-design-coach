@@ -84,7 +84,7 @@ export async function POST(request: Request) {
     return Response.json({
       sdp: answer,
       liveSessionId,
-      imagePushMode: process.env.IMAGE_PUSH_MODE ?? "queue-only",
+      imagePushEnabled: process.env.IMAGE_PUSH_MODE !== "off",
     });
   } catch (error) {
     return errorResponse(error);

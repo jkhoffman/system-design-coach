@@ -45,7 +45,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
   const warnedAt = useRef(new Set<number>());
   const endedRef = useRef(false);
   const unmountedRef = useRef(false);
-  const imagePushMode = useRef<string>("queue-only");
+  const imagePushEnabled = useRef(true);
   const finalPayload = useRef<FinalPayload | null>(null);
 
   const pacingWarnings = useMemo(
@@ -96,7 +96,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
   );
 
   const exportLiveImageDataUrl = useCallback(
-    () => exportBoardDataUrl({ mimeType: "image/jpeg", maxWidthOrHeight: 1024, quality: 0.85 }),
+    () => exportBoardDataUrl({ mimeType: "image/jpeg", maxWidthOrHeight: 1600, quality: 0.85 }),
     [exportBoardDataUrl]
   );
 
@@ -257,7 +257,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
           const summary = summarizeScene(currentElements());
           // Queue a fresh image so the NEXT delegation sees the actual board.
           const image = await exportLiveImageDataUrl().catch(() => null);
-          if (image && imagePushMode.current !== "off") {
+          if (image && imagePushEnabled.current) {
             transport.current?.queueBoardImage(image, "requested via view_whiteboard");
           }
           return JSON.stringify({ whiteboard: summary });
@@ -276,7 +276,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
         await t.close(false);
         return;
       }
-      imagePushMode.current = t.imagePushMode;
+      imagePushEnabled.current = t.imagePushEnabled;
     } catch (err) {
       await t.close(false);
       if (transport.current === t) transport.current = null;

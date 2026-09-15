@@ -23,8 +23,8 @@ board timeline.
 - **Whiteboard awareness**: on each drawing pause (~4s), a compact structural
   summary (labeled shapes + arrow bindings) is pushed silently via
   `session.thinking.append`. Capped PNG milestone snapshots are retained for
-  grading; a capped JPEG is sent to the delegated backend only when its
-  `view_whiteboard` tool requests a fresh look.
+  grading; a JPEG capped at 1600 px is sent to the delegated backend only when
+  its `view_whiteboard` tool requests a fresh look.
 - **Timeline**: transcript fragments (`session.input/output_transcript.delta`)
   are grouped into turns and merged with board summaries, phase markers, and
   snapshot references on the session's ms timeline.
@@ -46,7 +46,7 @@ npm install
 #   LIVE_BACKEND_MODEL=gpt-5.6-terra
 #   GRADING_MODEL=gpt-5.6-terra
 #   PROMPT_GEN_MODEL=gpt-5.6-terra
-#   IMAGE_PUSH_MODE=queue-only   (queue-only | queue-and-run | off)
+#   IMAGE_PUSH_MODE=on           (on | off)
 #   OPENAI_BASE_URL=https://api.openai.com/v1  (optional API/mock override)
 npm run dev
 ```

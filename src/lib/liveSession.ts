@@ -22,16 +22,14 @@ export interface LiveEvents {
 export interface LiveTransport {
   /** ms timestamp of session start on the session timeline (0) mapped to perf clock. */
   sessionT0(): number | null;
-  /** Server-selected image push strategy. */
-  imagePushMode: string;
+  /** Whether the server allows live board images to be queued. */
+  imagePushEnabled: boolean;
   connect(signal?: AbortSignal): Promise<void>;
   sendThinking(content: string): void;
   sendInstructions(content: string): void;
   sendCommentary(content: string): void;
   /** Queue a compact whiteboard image into the delegation context (data URL). */
   queueBoardImage(dataUrl: string, note: string): void;
-  /** Fire response.create so queued items are consumed now. */
-  runBackendNow(): void;
   mute(): void;
   unmute(): void;
   close(graceful?: boolean): Promise<void>;
@@ -78,7 +76,7 @@ export class GptLiveTransport implements LiveTransport {
   private endedNotified = false;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closeWaiter: (() => void) | null = null;
-  imagePushMode = "queue-only";
+  imagePushEnabled = true;
 
   constructor(
     private sessionDbId: string,
@@ -173,9 +171,11 @@ export class GptLiveTransport implements LiveTransport {
       const data = (await res.json()) as {
         sdp: string;
         liveSessionId?: string;
-        imagePushMode?: string;
+        imagePushEnabled?: boolean;
       };
-      if (data.imagePushMode) this.imagePushMode = data.imagePushMode;
+      if (typeof data.imagePushEnabled === "boolean") {
+        this.imagePushEnabled = data.imagePushEnabled;
+      }
       if (!data.sdp) throw new Error("no SDP answer from server");
       this.assertActive(signal);
       await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
@@ -390,10 +390,6 @@ export class GptLiveTransport implements LiveTransport {
     if (!sent) {
       this.sendThinking(`[whiteboard image unavailable — ${note}; use the latest structural summary]`);
     }
-  }
-
-  runBackendNow(): void {
-    this.send({ type: "response.create", event_id: eid("run") });
   }
 
   mute(): void {
