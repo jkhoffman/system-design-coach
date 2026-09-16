@@ -74,3 +74,7 @@ The live debug smoke uses the real API. It records data-channel message order an
 - Recordings require session storage enabled on the OpenAI project and expire in 30 days.
 - 60-minute sessions are marked experimental — the Live duration cap is unverified
   (the old Realtime cap was 60 min); an `expired` close auto-ends and grades the session.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
