@@ -9,7 +9,11 @@ import TimerChip from "./TimerChip";
 import { GptLiveTransport, type LiveTransport } from "@/lib/liveSession";
 import { Timeline } from "@/lib/timeline";
 import { summarizeScene, type ExcalidrawElementLike } from "@/lib/summarizeScene";
-import { interviewPacing } from "@/lib/pacing";
+import {
+  interviewClockContext,
+  interviewPacing,
+  TIME_CONTEXT_INTERVAL_MS,
+} from "@/lib/pacing";
 import { useBoardSync } from "./useBoardSync";
 import { useInterviewCheckpoint } from "./useInterviewCheckpoint";
 import type { LiveTraceEvent } from "@/lib/liveTrace";
@@ -45,6 +49,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
   const timeline = useRef(new Timeline());
   const t0 = useRef<number | null>(null);
   const warnedAt = useRef(new Set<number>());
+  const nextTimeContextAt = useRef(TIME_CONTEXT_INTERVAL_MS);
   const endedRef = useRef(false);
   const unmountedRef = useRef(false);
   const imagePushEnabled = useRef(true);
@@ -233,6 +238,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
     const controller = new AbortController();
     connectAbort.current?.abort();
     connectAbort.current = controller;
+    nextTimeContextAt.current = TIME_CONTEXT_INTERVAL_MS;
 
     const t = new GptLiveTransport(session.id, {
       onStatus(status, detail) {
@@ -315,6 +321,12 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
       const ms = sessionMs();
       setElapsedSec(Math.floor(ms / 1000));
       const remain = session.durationSec - ms / 1000;
+      if (ms >= nextTimeContextAt.current) {
+        const context = interviewClockContext(session.durationSec, ms);
+        if (context) transport.current?.sendThinking(context);
+        nextTimeContextAt.current =
+          (Math.floor(ms / TIME_CONTEXT_INTERVAL_MS) + 1) * TIME_CONTEXT_INTERVAL_MS;
+      }
       for (const warning of pacingWarnings) {
         if (remain <= warning.remainingSec && !warnedAt.current.has(warning.remainingSec)) {
           warnedAt.current.add(warning.remainingSec);

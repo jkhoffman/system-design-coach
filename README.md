@@ -27,7 +27,9 @@ board timeline.
   its `view_whiteboard` tool requests a fresh look.
 - **Timeline**: transcript fragments (`session.input/output_transcript.delta`)
   are grouped into turns and merged with board summaries, phase markers, and
-  snapshot references on the session's ms timeline.
+  snapshot references on the session's ms timeline. Every five active minutes, a
+  silent `[interview clock] elapsed MM:SS of MM:SS` context update is appended so
+  the interviewer can pace the conversation without guessing elapsed time.
 - **Recording**: sessions are created with `store: true`; the stereo WAV
   (candidate left / interviewer right) is downloaded after the interview and
   served on the review page.

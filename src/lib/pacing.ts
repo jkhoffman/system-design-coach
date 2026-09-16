@@ -9,6 +9,21 @@ export interface InterviewPacing {
   warnings: PacingWarning[];
 }
 
+export const TIME_CONTEXT_INTERVAL_MS = 5 * 60_000;
+
+function formatClock(totalSec: number): string {
+  const mins = Math.floor(totalSec / 60);
+  const secs = Math.floor(totalSec % 60);
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+export function interviewClockContext(durationSec: number, elapsedMs: number): string | null {
+  const elapsedSec = Math.floor(elapsedMs / 1000);
+  if (elapsedSec < TIME_CONTEXT_INTERVAL_MS / 1000 || elapsedSec >= durationSec) return null;
+  const remainingSec = durationSec - elapsedSec;
+  return `[interview clock] elapsed ${formatClock(elapsedSec)} of ${formatClock(durationSec)} (${formatClock(remainingSec)} remaining)`;
+}
+
 function fmtRemaining(sec: number): string {
   if (sec < 90) return `${Math.max(1, Math.round(sec))} seconds`;
   const mins = Math.max(1, Math.round(sec / 60));

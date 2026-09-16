@@ -7,7 +7,7 @@ process.env.APP_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "interview-app-
 
 const { summarizeScene } = await import("../src/lib/summarizeScene.ts");
 const { Timeline } = await import("../src/lib/timeline.ts");
-const { interviewPacing } = await import("../src/lib/pacing.ts");
+const { interviewClockContext, interviewPacing } = await import("../src/lib/pacing.ts");
 const { buildGradingInput, validateGradeReport, RUBRIC } = await import("../src/lib/rubric.ts");
 const {
   claimGrading,
@@ -90,6 +90,12 @@ assert.deepEqual(
   interviewPacing(45 * 60).warnings.map((w) => w.remainingSec),
   [600, 300]
 );
+assert.equal(interviewClockContext(30 * 60, 299_999), null);
+assert.equal(
+  interviewClockContext(30 * 60, 300_000),
+  "[interview clock] elapsed 05:00 of 30:00 (25:00 remaining)"
+);
+assert.equal(interviewClockContext(30 * 60, 1_800_000), null);
 
 const gradingInput = buildGradingInput({
   briefing: { company: "Example", position: "SWE", level: "L5" },
