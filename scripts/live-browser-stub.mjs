@@ -111,6 +111,15 @@ export function installLiveBrowserStub() {
         at: performance.now(),
       });
 
+      const appendAck = {
+        "session.commentary.append": "session.commentary.appended",
+        "session.thinking.append": "session.thinking.appended",
+        "session.instructions.append": "session.instructions.appended",
+      }[message.type];
+      if (appendAck) {
+        this.emit({ type: appendAck, event_id: message.event_id });
+      }
+
       if (message.type === "session.commentary.append") {
         this.emitTranscript(
           "interviewer",
@@ -141,6 +150,7 @@ export function installLiveBrowserStub() {
           state.boardSummaries++;
           state.toolCalls++;
           this.emit({ type: "session.delegation.created" });
+          this.emit({ type: "response.event", event: { type: "response.created" } });
           this.emit({
             type: "response.event",
             event: {
@@ -178,8 +188,8 @@ export function installLiveBrowserStub() {
           this.emitTranscript(
             "interviewer",
             "I can see the client feeding the API layer; tell me how the write path handles duplicates.",
-            6200,
-            8200
+            6500,
+            8300
           );
         } else {
           this.emitTranscript("interviewer", "What scale are you assuming for reads and writes?", 4200, 5600);

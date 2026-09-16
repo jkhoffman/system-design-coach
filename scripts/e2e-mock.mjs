@@ -73,6 +73,13 @@ async function getSession(baseUrl, id) {
   return body.session;
 }
 
+async function getDiagnostics(baseUrl, id) {
+  const response = await fetch(`${baseUrl}/api/sessions/${id}/diagnostics`);
+  const body = await response.json().catch(() => ({}));
+  assert.equal(response.status, 200, `diagnostics fetch failed: ${JSON.stringify(body)}`);
+  return body;
+}
+
 async function waitForSession(baseUrl, id, predicate, description) {
   return await waitFor(async () => {
     const session = await getSession(baseUrl, id);
@@ -182,6 +189,27 @@ async function runHappyPath(context, baseUrl, mock, pageErrors) {
   });
   assert.equal(rangeResponse.status, 206, "recording range request was not served");
 
+  const diagnostics = await getDiagnostics(baseUrl, session.id);
+  assert.ok(diagnostics.analysis.eventCount > 20, "live trace was not persisted");
+  assert.equal(diagnostics.analysis.counts.in > 0, true);
+  assert.equal(diagnostics.analysis.counts.out > 0, true);
+  assert.equal(diagnostics.analysis.counts.local > 0, true);
+  const stage = (name) => diagnostics.analysis.stages.find((s) => s.name === name);
+  assert.equal(stage("delegation_to_response_created").status, "ok");
+  assert.equal(stage("tool_call_to_tool_result").status, "ok");
+  assert.equal(stage("tool_result_to_continuation").status, "ok");
+  assert.equal(stage("continuation_to_response_completed").status, "ok");
+  assert.ok(
+    diagnostics.analysis.appendLatencies.some((l) => l.type === "session.thinking.append"),
+    "thinking append acknowledgment was not traced"
+  );
+  assert.ok(
+    diagnostics.analysis.turnGaps.some((gap) => gap.durationMs >= 2_000),
+    "interviewer response gap was not analyzed"
+  );
+  const diagnosticsJson = JSON.stringify(diagnostics);
+  assert.doesNotMatch(diagnosticsJson, /data:image|base64,|RIFF|WAVE/, "diagnostics exposed raw media");
+
   await page.getByRole("heading", { name: "Scorecard" }).waitFor({ timeout: 10_000 });
   await page.locator("audio").waitFor({ timeout: 10_000 });
 
@@ -209,8 +237,16 @@ async function runHappyPath(context, baseUrl, mock, pageErrors) {
   assert.ok(imageIndex > toolResultIndex, "board image was not sent after the tool result");
   assert.ok(backendRunIndex > imageIndex, "backend run was not requested after the board image");
   assert.ok(
+    stub.received.some((message) => message.innerType === "response.created"),
+    "delegation did not emit nested response.created"
+  );
+  assert.ok(
     stub.received.some((message) => message.innerType === "response.completed"),
     "delegation did not complete through response.completed"
+  );
+  assert.ok(
+    stub.received.some((message) => message.type === "session.thinking.appended"),
+    "thinking append was not acknowledged"
   );
   const closeIndex = stub.sent.findIndex((message) => message.type === "session.close");
   const sessionClosed = stub.received.find((message) => message.type === "session.closed");
@@ -249,6 +285,13 @@ async function runCheckpointRecovery(context, baseUrl, mock, pageErrors) {
   assert.equal(mock.counts.liveCreate, 2, "recovery unexpectedly created another live session");
   assert.equal(mock.counts.gradeResponses, 2, "recovered interview was not graded exactly once");
   assert.equal(mock.counts.recordingGet, 2, "recovered recording was not downloaded exactly once");
+
+  const diagnostics = await getDiagnostics(baseUrl, session.id);
+  assert.ok(diagnostics.analysis.eventCount > 10, "checkpointed live trace was not persisted");
+  assert.ok(
+    diagnostics.analysis.eventTypes["session.started"] >= 1,
+    "checkpointed trace did not include session.started"
+  );
 
   await page.close();
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef } from "react";
+import type { LiveTraceEvent } from "@/lib/liveTrace";
 import type { Timeline } from "@/lib/timeline";
 
 const CHECKPOINT_MS = 5_000;
@@ -14,9 +15,10 @@ export function useInterviewCheckpoint(input: {
   timeline: Ref<Timeline>;
   t0: Ref<number | null>;
   ended: Ref<boolean>;
+  liveTrace: () => LiveTraceEvent[];
   active: boolean;
 }) {
-  const { sessionId, timeline, t0, ended, active } = input;
+  const { sessionId, timeline, t0, ended, liveTrace, active } = input;
   const persistInFlight = useRef(false);
 
   const progressPayload = useCallback(() => {
@@ -24,8 +26,9 @@ export function useInterviewCheckpoint(input: {
       kind: "progress",
       transcript: timeline.current.getTranscript(),
       timeline: timeline.current.getEvents(),
+      liveTrace: liveTrace(),
     };
-  }, [timeline]);
+  }, [timeline, liveTrace]);
 
   const saveProgress = useCallback(async () => {
     if (t0.current == null || ended.current || persistInFlight.current) return;

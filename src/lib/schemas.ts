@@ -66,17 +66,48 @@ export const TimelineEventSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export const LiveTraceEventSchema = z.looseObject({
+  seq: z.number().finite(),
+  dir: z.enum(["in", "out", "local"]),
+  atPerfMs: z.number().finite().min(0),
+  sessionMs: z.number().finite().min(0).optional(),
+  type: z.string().max(120),
+  innerType: z.string().max(120).optional(),
+  eventId: z.string().max(200).optional(),
+  clientEventId: z.string().max(200).optional(),
+  delegationId: z.string().max(200).optional(),
+  responseId: z.string().max(200).optional(),
+  callId: z.string().max(200).optional(),
+  itemType: z.string().max(120).optional(),
+  toolName: z.string().max(120).optional(),
+  speaker: z.enum(["candidate", "interviewer"]).optional(),
+  startMs: z.number().finite().min(0).optional(),
+  endMs: z.number().finite().min(0).optional(),
+  offsetMs: z.number().finite().min(0).optional(),
+  bytes: z.number().int().min(0).optional(),
+  hasImage: z.boolean().optional(),
+  imageBytes: z.number().int().min(0).optional(),
+  sent: z.boolean().optional(),
+  textPreview: z.string().max(500).optional(),
+  detail: z.string().max(500).optional(),
+  error: z.string().max(2000).optional(),
+});
+
+export const LiveTraceSchema = z.array(LiveTraceEventSchema).max(20_000);
+
 export const SessionPatchSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("progress"),
     transcript: z.array(TranscriptTurnSchema).max(20_000),
     timeline: z.array(TimelineEventSchema).max(50_000),
+    liveTrace: LiveTraceSchema.optional(),
   }),
   z.object({
     kind: z.literal("finish"),
     endedAt: z.number().int().positive(),
     transcript: z.array(TranscriptTurnSchema).max(20_000),
     timeline: z.array(TimelineEventSchema).max(50_000),
+    liveTrace: LiveTraceSchema.optional(),
     finalScene: z.array(z.unknown()).max(50_000).optional(),
     finalImage: z.string().max(MAX_PNG_DATA_URL_CHARS).regex(/^data:image\/(png|jpeg|webp);base64,/).nullable().optional(),
   }),

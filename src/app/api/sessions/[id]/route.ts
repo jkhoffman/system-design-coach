@@ -23,7 +23,11 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       if (session.status !== "live") {
         return Response.json({ error: "session is not live" }, { status: 409 });
       }
-      updateSession(id, { transcript: body.transcript, timeline: body.timeline });
+      updateSession(id, {
+        transcript: body.transcript,
+        timeline: body.timeline,
+        liveTrace: body.liveTrace,
+      });
       return Response.json({ session: toClientSession(getSession(id)!) });
     }
 
@@ -42,6 +46,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
         endedAt: body.endedAt,
         transcript: body.transcript,
         timeline: body.timeline,
+        liveTrace: body.liveTrace,
         finalScene: body.finalScene,
         finalImage: body.finalImage === undefined ? undefined : body.finalImage,
       });

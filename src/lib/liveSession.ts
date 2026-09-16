@@ -1,3 +1,5 @@
+import { LiveTrace, type LiveTraceEvent } from "./liveTrace";
+
 /**
  * LiveTransport abstracts the voice-interview session so a different backend
  * (e.g. gpt-realtime-2.1, whose event vocabulary and tool loop differ) can be
@@ -33,6 +35,8 @@ export interface LiveTransport {
   mute(): void;
   unmute(): void;
   close(graceful?: boolean): Promise<void>;
+  traceSnapshot(): LiveTraceEvent[];
+  markLocal(type: string, detail?: string): void;
 }
 
 type LiveEvent = {
@@ -76,6 +80,7 @@ export class GptLiveTransport implements LiveTransport {
   private endedNotified = false;
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closeWaiter: (() => void) | null = null;
+  private trace = new LiveTrace();
   imagePushEnabled = true;
 
   constructor(
@@ -85,6 +90,14 @@ export class GptLiveTransport implements LiveTransport {
 
   sessionT0(): number | null {
     return this.t0;
+  }
+
+  traceSnapshot(): LiveTraceEvent[] {
+    return this.trace.snapshot();
+  }
+
+  markLocal(type: string, detail?: string): void {
+    this.trace.mark(type, detail);
   }
 
   private abortError(): DOMException {
@@ -99,14 +112,17 @@ export class GptLiveTransport implements LiveTransport {
     try {
       this.assertActive(signal);
       this.ev.onStatus("connecting", "requesting microphone access");
+      this.trace.mark("mic.request");
       this.mic = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
       });
+      this.trace.mark("mic.acquired");
       this.assertActive(signal);
 
       this.ev.onStatus("connecting", "creating WebRTC offer");
       const pc = new RTCPeerConnection();
       this.pc = pc;
+      this.trace.mark("peer.created");
 
       const audioEl = document.createElement("audio");
       audioEl.autoplay = true;
@@ -115,6 +131,7 @@ export class GptLiveTransport implements LiveTransport {
         audioEl.srcObject = e.streams[0];
       };
       pc.onconnectionstatechange = () => {
+        this.trace.mark("peer.connectionstate", pc.connectionState);
         if (this.closing || !this.sessionStarted) return;
         if (pc.connectionState === "disconnected") {
           this.disconnectTimer ??= setTimeout(() => {
@@ -136,8 +153,11 @@ export class GptLiveTransport implements LiveTransport {
 
       const dc = pc.createDataChannel("oai-events");
       this.dc = dc;
+      this.trace.mark("dc.created", dc.label);
+      dc.onopen = () => this.trace.mark("dc.open");
       dc.onmessage = (m) => this.handleMessage(m.data);
       dc.onclose = () => {
+        this.trace.mark("dc.close", this.sessionStarted ? "after session start" : "before session start");
         if (this.closing) {
           this.resolveCloseWaiter();
         } else if (this.sessionStarted) {
@@ -146,7 +166,9 @@ export class GptLiveTransport implements LiveTransport {
       };
 
       const offer = await pc.createOffer();
+      this.trace.mark("sdp.offer.created");
       await pc.setLocalDescription(offer);
+      this.trace.mark("sdp.local_description_set");
       await new Promise<void>((resolve) => {
         if (pc.iceGatheringState === "complete") return resolve();
         const check = () => {
@@ -158,15 +180,18 @@ export class GptLiveTransport implements LiveTransport {
         pc.addEventListener("icegatheringstatechange", check);
         setTimeout(resolve, 3000); // don't hang on ICE trickle
       });
+      this.trace.mark("ice.gathering_finished", pc.iceGatheringState);
       this.assertActive(signal);
 
       this.ev.onStatus("connecting", "contacting interviewer");
+      this.trace.mark("live_api.request");
       const res = await fetch("/api/live/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: this.sessionDbId, sdp: pc.localDescription?.sdp }),
         signal,
       });
+      this.trace.mark("live_api.response", String(res.status));
       if (!res.ok) throw new Error(`live session create failed: ${res.status} ${await res.text()}`);
       const data = (await res.json()) as {
         sdp: string;
@@ -177,10 +202,13 @@ export class GptLiveTransport implements LiveTransport {
         this.imagePushEnabled = data.imagePushEnabled;
       }
       if (!data.sdp) throw new Error("no SDP answer from server");
+      this.trace.mark("live_api.answer", data.liveSessionId);
       this.assertActive(signal);
       await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+      this.trace.mark("sdp.remote_description_set");
       this.assertActive(signal);
     } catch (err) {
+      this.trace.mark("connect.error", err instanceof Error ? err.message : String(err));
       await this.close(false);
       throw err;
     }
@@ -198,16 +226,18 @@ export class GptLiveTransport implements LiveTransport {
   }
 
   private send(obj: Record<string, unknown>): boolean {
+    const raw = JSON.stringify(obj);
     const dc = this.dc;
     if (dc?.readyState !== "open") {
+      this.trace.outgoing(obj, raw, false, `data channel is ${dc?.readyState ?? "missing"}`);
       console.warn(`[live] dropped ${String(obj.type)}; data channel is ${dc?.readyState ?? "missing"}`);
       return false;
     }
-    const raw = JSON.stringify(obj);
     const bytes = new TextEncoder().encode(raw).length;
     const negotiatedMax = this.pc?.sctp?.maxMessageSize;
     const maxMessageSize = negotiatedMax && negotiatedMax > 0 ? negotiatedMax : 64 * 1024;
     if (bytes > maxMessageSize) {
+      this.trace.outgoing(obj, raw, false, `oversized message (${bytes} > ${maxMessageSize})`);
       console.warn(
         `[live] dropped oversized ${String(obj.type)} message (${bytes} bytes > ${maxMessageSize} bytes)`
       );
@@ -215,8 +245,11 @@ export class GptLiveTransport implements LiveTransport {
     }
     try {
       dc.send(raw);
+      this.trace.outgoing(obj, raw, true);
       return true;
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.trace.outgoing(obj, raw, false, message);
       console.warn(`[live] failed to send ${String(obj.type)}`, err);
       return false;
     }
@@ -230,6 +263,7 @@ export class GptLiveTransport implements LiveTransport {
   }
 
   private handleMessage(raw: string): void {
+    this.trace.incoming(raw);
     let ev: LiveEvent;
     try {
       ev = JSON.parse(raw) as LiveEvent;
@@ -308,14 +342,24 @@ export class GptLiveTransport implements LiveTransport {
 
     void (async () => {
       this.toolCallDepth++;
+      const startedAt = performance.now();
+      this.trace.mark("tool.handler.start", `${item.name}:${callId}`, { callId, toolName: item.name });
       try {
         const output = await this.ev.onToolCall(item.name!, args);
+        this.trace.mark("tool.handler.end", `${Math.round(performance.now() - startedAt)}ms`, {
+          callId,
+          toolName: item.name,
+        });
         this.send({
           type: "response.item.create",
           event_id: eid("tool_result"),
           item: { type: "function_call_output", call_id: callId, output },
         });
       } catch (err) {
+        this.trace.mark("tool.handler.error", err instanceof Error ? err.message : String(err), {
+          callId,
+          toolName: item.name,
+        });
         this.send({
           type: "response.item.create",
           event_id: eid("tool_result"),
@@ -364,6 +408,7 @@ export class GptLiveTransport implements LiveTransport {
   queueBoardImage(dataUrl: string, note: string): void {
     if (this.toolCallDepth > 0) {
       this.queuedBoardImages.push({ dataUrl, note });
+      this.trace.mark("board_image.queued", note, { imageBytes: dataUrl.length });
       return;
     }
     this.sendBoardImage(dataUrl, note);
@@ -403,6 +448,7 @@ export class GptLiveTransport implements LiveTransport {
   async close(graceful = true): Promise<void> {
     if (this.closing) return;
     this.closing = true;
+    this.trace.mark("close.requested", graceful ? "graceful" : "immediate");
     this.clearDisconnectTimer();
     const closeSent = !this.sessionClosed && this.send({ type: "session.close", event_id: eid("close") });
     if (graceful && closeSent && this.sessionStarted && !this.sessionClosed) {
@@ -414,7 +460,12 @@ export class GptLiveTransport implements LiveTransport {
         new Promise<true>((resolve) => setTimeout(() => resolve(true), 10_000)),
       ]);
       this.closeWaiter = null;
-      if (timedOut) console.warn("[live] timed out waiting for session.closed");
+      if (timedOut) {
+        this.trace.mark("close.ack_timeout");
+        console.warn("[live] timed out waiting for session.closed");
+      } else {
+        this.trace.mark("close.acknowledged");
+      }
     }
     const dc = this.dc;
     const pc = this.pc;
@@ -436,5 +487,6 @@ export class GptLiveTransport implements LiveTransport {
     }
     mic?.getTracks().forEach((t) => t.stop());
     if (audioEl) audioEl.srcObject = null;
+    this.trace.mark("teardown.complete");
   }
 }

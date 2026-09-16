@@ -12,6 +12,7 @@ import { summarizeScene, type ExcalidrawElementLike } from "@/lib/summarizeScene
 import { interviewPacing } from "@/lib/pacing";
 import { useBoardSync } from "./useBoardSync";
 import { useInterviewCheckpoint } from "./useInterviewCheckpoint";
+import type { LiveTraceEvent } from "@/lib/liveTrace";
 import type { ClientSession, TimelineEvent, TranscriptTurn } from "@/lib/types";
 import type { ExcalidrawImperativeAPI } from "@excalidraw/excalidraw/types";
 
@@ -22,6 +23,7 @@ type FinalPayload = {
   endedAt: number;
   transcript: TranscriptTurn[];
   timeline: TimelineEvent[];
+  liveTrace?: LiveTraceEvent[];
   finalScene: readonly unknown[];
   finalImage: string | null;
 };
@@ -110,11 +112,17 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
     exportPngDataUrl,
   });
 
+  const liveTraceSnapshot = useCallback(
+    () => transport.current?.traceSnapshot() ?? [],
+    []
+  );
+
   useInterviewCheckpoint({
     sessionId: session.id,
     timeline,
     t0,
     ended: endedRef,
+    liveTrace: liveTraceSnapshot,
     active: phase === "live",
   });
 
@@ -191,6 +199,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
         endedAt: Date.now(),
         transcript: timeline.current.getTranscript(),
         timeline: timeline.current.getEvents(),
+        liveTrace: transport.current?.traceSnapshot() ?? [],
         finalScene,
         finalImage,
       };
@@ -256,7 +265,9 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
         if (name === "view_whiteboard") {
           const summary = summarizeScene(currentElements());
           // Queue a fresh image so the NEXT delegation sees the actual board.
+          transport.current?.markLocal("tool.view_whiteboard.export.start");
           const image = await exportLiveImageDataUrl().catch(() => null);
+          transport.current?.markLocal("tool.view_whiteboard.export.end", image ? `${image.length} chars` : "failed");
           if (image && imagePushEnabled.current) {
             transport.current?.queueBoardImage(image, "requested via view_whiteboard");
           }

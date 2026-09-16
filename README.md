@@ -1,4 +1,4 @@
-# Mock System Design Interviewer
+# System Design Coach
 
 A voice-driven mock system design interview app. You draw on an Excalidraw
 whiteboard while a GPT-Live-1 interviewer runs the session — delivers the
@@ -66,6 +66,37 @@ npm run smoke:live:debug # instrumented GPT-Live protocol probe (paid/stateful)
 The mocked E2E builds the app, starts a temporary production server and local OpenAI-compatible server, stubs the browser's WebRTC/microphone APIs with Playwright, and uses a temporary SQLite directory. It does not call OpenAI.
 
 The live debug smoke uses the real API. It records data-channel message order and byte sizes, verifies `response.completed` and `session.closed` arrive before teardown, draws a visual-only code, asserts the delegated backend reads that code from the image, and polls recording/grading to completion.
+
+## Live diagnostics
+
+Every GPT-Live transport keeps a bounded, redacted diagnostic trace while the
+interview is running. Checkpoints and the final save persist the trace with the
+session so stalls can be analyzed after the fact. The trace records event
+direction/type, monotonic timestamps, response/delegation/tool IDs, byte counts,
+and short text previews; it does not store raw audio, image payloads, SDP, or
+OpenAI credentials. Event count, field lengths, object depth, and payload size
+are capped by `src/lib/liveTrace.ts`; there are currently no tracing environment
+switches.
+
+Analyze a saved session without an OpenAI key:
+
+```bash
+npm run trace:report -- <session-id>
+# or analyze an exported/pasted trace JSON file:
+npm run trace:report -- path/to/trace.json
+```
+
+The running app also exposes the same summary:
+
+```text
+GET /api/sessions/<session-id>/diagnostics
+```
+
+The report separates candidate turn-taking, delegation queueing, tool execution,
+tool-result continuation, backend response completion, context-append
+acknowledgment, and speech-output gaps. Missing signals are reported rather than
+assumed to be the cause. This instrumentation is diagnostic-only; it does not
+change prompts, models, timing, or retry behavior.
 
 ## Notes
 

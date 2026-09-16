@@ -1,3 +1,5 @@
+import type { LiveTraceEvent } from "./liveTrace";
+
 export type Mode = "library" | "custom";
 
 export interface Briefing {
@@ -61,6 +63,7 @@ export interface SessionRow {
   gradeError?: string;
   transcript: TranscriptTurn[];
   timeline: TimelineEvent[];
+  liveTrace?: LiveTraceEvent[];
   finalScene?: unknown;
   finalImage?: string;
   grade?: GradeReport;

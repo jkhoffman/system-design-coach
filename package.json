@@ -1,5 +1,5 @@
 {
-  "name": "2026-09-14-system-design-teacher",
+  "name": "system-design-coach",
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
@@ -11,7 +11,8 @@
     "check:pure": "node scripts/check-pure.mjs",
     "test:e2e:mock": "npm run build && node scripts/e2e-mock.mjs",
     "smoke:live": "node scripts/live-smoke.mjs",
-    "smoke:live:debug": "node scripts/live-smoke-debug.mjs"
+    "smoke:live:debug": "node scripts/live-smoke-debug.mjs",
+    "trace:report": "node scripts/live-trace-report.mjs"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",

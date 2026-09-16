@@ -23,7 +23,7 @@ export const RECORDING_DIR = path.join(DATA_DIR, "recordings");
 
 const GRADING_CLAIM_STALE_MS = 3 * 60 * 1000;
 const RECORDING_CLAIM_STALE_MS = 2 * 60 * 1000;
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 function ensureDirs() {
   for (const d of [DATA_DIR, SNAPSHOT_DIR, RECORDING_DIR]) {
@@ -57,6 +57,7 @@ function ensureSchema(db: DatabaseSync): void {
       recording_path TEXT,
       transcript TEXT NOT NULL DEFAULT '[]',
       timeline TEXT NOT NULL DEFAULT '[]',
+      live_trace TEXT NOT NULL DEFAULT '[]',
       final_scene TEXT,
       final_image TEXT,
       grade TEXT,
@@ -74,6 +75,7 @@ function ensureSchema(db: DatabaseSync): void {
   addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN recording_status TEXT NOT NULL DEFAULT 'idle'");
   addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN recording_started_at INTEGER");
   addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN recording_error TEXT");
+  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN live_trace TEXT NOT NULL DEFAULT '[]'");
   db.exec(`
     UPDATE interview_sessions SET grading_status = 'done' WHERE grade IS NOT NULL AND grading_status = 'idle';
     UPDATE interview_sessions SET recording_status = 'done' WHERE recording_path IS NOT NULL AND recording_path != '' AND recording_status = 'idle';
@@ -117,6 +119,7 @@ interface RawRow {
   recording_error: string | null;
   transcript: string;
   timeline: string;
+  live_trace: string | null;
   final_scene: string | null;
   final_image: string | null;
   grade: string | null;
@@ -141,6 +144,7 @@ function toRow(r: RawRow): SessionRow {
     recordingError: r.recording_error ?? undefined,
     transcript: JSON.parse(r.transcript) as TranscriptTurn[],
     timeline: JSON.parse(r.timeline) as TimelineEvent[],
+    liveTrace: r.live_trace ? (JSON.parse(r.live_trace) as SessionRow["liveTrace"]) : [],
     finalScene: r.final_scene ? JSON.parse(r.final_scene) : undefined,
     finalImage: r.final_image ?? undefined,
     grade: r.grade ? (JSON.parse(r.grade) as GradeReport) : undefined,
@@ -223,6 +227,7 @@ export function updateSession(
     recordingError: string | null;
     transcript: TranscriptTurn[];
     timeline: TimelineEvent[];
+    liveTrace: SessionRow["liveTrace"];
     finalScene: unknown;
     finalImage: string | null;
     grade: GradeReport;
@@ -245,6 +250,7 @@ export function updateSession(
   if (patch.recordingError !== undefined) add("recording_error", patch.recordingError);
   if (patch.transcript !== undefined) add("transcript", JSON.stringify(patch.transcript));
   if (patch.timeline !== undefined) add("timeline", JSON.stringify(patch.timeline));
+  if (patch.liveTrace !== undefined) add("live_trace", JSON.stringify(patch.liveTrace));
   if (patch.finalScene !== undefined) add("final_scene", JSON.stringify(patch.finalScene));
   if (patch.finalImage !== undefined) add("final_image", patch.finalImage);
   if (patch.grade !== undefined) add("grade", JSON.stringify(patch.grade));
