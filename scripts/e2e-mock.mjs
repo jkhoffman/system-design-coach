@@ -294,7 +294,7 @@ async function runHappyPath(context, baseUrl, mock, pageErrors) {
   await page.close();
 }
 
-async function runCheckpointRecovery(context, baseUrl, mock, pageErrors) {
+async function runCheckpointRecovery(context, baseUrl, dataDir, mock, pageErrors) {
   const session = await createSession(baseUrl);
   const page = await context.newPage();
   page.on("pageerror", (error) => pageErrors.push(`checkpoint recovery: ${error}`));
@@ -302,6 +302,12 @@ async function runCheckpointRecovery(context, baseUrl, mock, pageErrors) {
   await joinMockInterview(page, baseUrl, session.id);
   await page.waitForTimeout(6_500);
   await page.reload();
+  // A reload cannot steal an active lease. Simulate its expiry without a three-minute wait.
+  await page.getByRole("button", { name: "Review saved progress" }).click();
+  await page.getByText(/active in another tab/).waitFor();
+  const database = new DatabaseSync(path.join(dataDir, "app.db"));
+  database.prepare("UPDATE interview_sessions SET start_expires_at = 1 WHERE id = ?").run(session.id);
+  database.close();
   await page.getByRole("button", { name: "Review saved progress" }).click();
   await page.waitForURL("**/review", { timeout: 30_000 });
 
@@ -369,10 +375,15 @@ async function runSaveRetry(context, baseUrl, pageErrors) {
 async function runExpiredJobs(context, baseUrl, dataDir, mock, pageErrors) {
   const session = await createSession(baseUrl);
   const connection = await fetch(`${baseUrl}/api/live/session`, { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ sessionId: session.id, sdp: "mock-expired-jobs-offer" }) });
+    body: JSON.stringify({ ownerToken: crypto.randomUUID(), sessionId: session.id, sdp: "mock-expired-jobs-offer" }) });
   assert.equal(connection.status, 200);
+  const { ownerToken, generation } = await connection.json();
+  const owner = { ownerToken, generation };
+  const confirmed = await fetch(`${baseUrl}/api/sessions/${session.id}/connection`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "confirm", ...owner }) });
+  assert.equal(confirmed.status, 200);
   const finish = await fetch(`${baseUrl}/api/sessions/${session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ kind: "finish", endedAt: Date.now(), transcript: [], timeline: [] }) });
+    body: JSON.stringify({ kind: "finish", ...owner, requestId: crypto.randomUUID(), endedAt: Date.now(), transcript: [], timeline: [] }) });
   assert.equal(finish.status, 200);
   const database = new DatabaseSync(path.join(dataDir, "app.db"));
   try {
@@ -389,6 +400,142 @@ async function runExpiredJobs(context, baseUrl, dataDir, mock, pageErrors) {
   assert.equal(mock.counts.gradeResponses - before.gradeResponses, 1, "concurrent tabs duplicated grading");
   assert.equal(mock.counts.recordingGet - before.recordingGet, 1, "concurrent tabs duplicated recording download");
   await Promise.all(pages.map((page) => page.close()));
+}
+
+async function runStartupRetry(context, baseUrl, mock, pageErrors) {
+  const session = await createSession(baseUrl);
+  const page = await context.newPage();
+  page.on("pageerror", (error) => pageErrors.push(`startup retry: ${error}`));
+  await page.goto(`${baseUrl}/interview/${session.id}`);
+  await page.evaluate(() => {
+    const original = RTCPeerConnection.prototype.setRemoteDescription;
+    let failed = false;
+    RTCPeerConnection.prototype.setRemoteDescription = function (description) {
+      if (!failed) { failed = true; return Promise.reject(new Error("Injected SDP failure")); }
+      return original.call(this, description);
+    };
+  });
+  const before = { ...mock.counts };
+  await page.getByRole("button", { name: "Join interview" }).click();
+  await page.getByText("Injected SDP failure").waitFor({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Join interview" }).waitFor();
+  assert.equal(mock.counts.liveHangup - before.liveHangup, 1);
+  await page.getByRole("button", { name: "Join interview" }).click();
+  await page.getByRole("button", { name: "End interview" }).waitFor();
+  assert.equal(mock.counts.liveCreate - before.liveCreate, 2);
+  await page.getByRole("button", { name: "End interview" }).click();
+  await page.waitForURL("**/review");
+  await waitForSession(baseUrl, session.id, (row) => row.gradeStatus === "done" && row.recordingStatus === "done", "retried startup review");
+  await page.close();
+}
+
+async function runStaleTabAndLegacyReview(context, baseUrl, dataDir, mock, pageErrors) {
+  const session = await createSession(baseUrl);
+  const active = await context.newPage();
+  const stale = await context.newPage();
+  for (const page of [active, stale]) page.on("pageerror", (error) => pageErrors.push(`stale tab: ${error}`));
+  await joinMockInterview(active, baseUrl, session.id);
+  await stale.goto(`${baseUrl}/interview/${session.id}`);
+  await stale.getByRole("button", { name: "Review saved progress" }).click();
+  await stale.getByText(/active in another tab/).waitFor();
+  await active.evaluate(() => window.__liveStub.emit({ type: "session.input_transcript.delta", delta: "latest active-tab content", start_ms: 15_000, end_ms: 16_000 }));
+  await active.getByText(/latest active-tab content/).waitFor();
+  await active.getByRole("button", { name: "End interview" }).click();
+  await active.waitForURL("**/review");
+  const finished = await waitForSession(baseUrl, session.id, (row) => row.gradeStatus === "done" && row.recordingStatus === "done", "active tab saved");
+  assert.ok(finished.transcript.some((turn) => turn.text.includes("latest active-tab content")));
+  await stale.getByRole("button", { name: "Review saved progress" }).click();
+  await stale.getByText(/already finalized/).waitFor();
+  await active.close(); await stale.close();
+
+  const ready = await context.newPage();
+  ready.on("pageerror", (error) => pageErrors.push(`ready recording: ${error}`));
+  let statusPolls = 0;
+  await ready.route(`**/api/sessions/${session.id}/status`, (route) => { statusPolls++; return route.abort(); });
+  await ready.goto(`${baseUrl}/interview/${session.id}/review`);
+  await ready.locator("audio").waitFor();
+  await ready.getByRole("heading", { name: "Scorecard" }).waitFor();
+  await ready.waitForTimeout(500);
+  assert.equal(statusPolls, 0, "ready recording unnecessarily polled status");
+  await ready.close();
+
+  const database = new DatabaseSync(path.join(dataDir, "app.db"));
+  database.prepare("UPDATE interview_sessions SET grade = '{broken', grade_readable = 0 WHERE id = ?").run(session.id);
+  database.close();
+  const repair = await context.newPage();
+  repair.on("pageerror", (error) => pageErrors.push(`legacy grade repair: ${error}`));
+  const count = mock.counts.gradeResponses;
+  await repair.goto(`${baseUrl}/interview/${session.id}/review`);
+  await repair.getByText("Saved scorecard needs recovery").waitFor();
+  assert.equal(mock.counts.gradeResponses, count, "unreadable grade was retried without an explicit action");
+  await repair.getByRole("button", { name: "Retry grading" }).click();
+  await repair.getByRole("heading", { name: "Scorecard" }).waitFor({ timeout: 20_000 });
+  assert.equal(mock.counts.gradeResponses, count + 1);
+  await repair.close();
+}
+
+async function runFinalConflict(context, baseUrl, pageErrors) {
+  const session = await createSession(baseUrl);
+  const page = await context.newPage();
+  page.on("pageerror", (error) => pageErrors.push(`final conflict: ${error}`));
+  let saves = 0;
+  await page.route(`**/api/sessions/${session.id}`, async (route) => {
+    if (route.request().method() !== "PATCH" || route.request().postDataJSON()?.kind !== "finish") return route.continue();
+    saves++;
+    return route.fulfill({ status: 409, json: { error: "Another tab finalized this interview" } });
+  });
+  await joinMockInterview(page, baseUrl, session.id);
+  await page.getByRole("button", { name: "End interview" }).click();
+  await page.getByText(/Another tab finalized/).waitFor();
+  assert.equal(saves, 1, "ownership conflict was automatically retried");
+  const downloading = page.waitForEvent("download");
+  await page.getByRole("button", { name: "Export local work" }).click();
+  const download = await downloading;
+  const local = JSON.parse(fs.readFileSync(await download.path(), "utf8"));
+  assert.ok(local.transcript.length > 0);
+  assert.equal(local.ownerToken, undefined);
+  assert.equal(await page.evaluate(() => window.__liveStub.micTracksStopped), 1);
+  await page.close();
+}
+
+async function runLongRecordingClient(context, baseUrl, pageErrors) {
+  const session = await createSession(baseUrl);
+  const page = await context.newPage();
+  page.on("pageerror", (error) => pageErrors.push(`long recording: ${error}`));
+  await page.addInitScript(() => {
+    // DOM-native AbortSignal timers are not controlled by Playwright's JS clock.
+    AbortSignal.timeout = (ms) => {
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+      return controller.signal;
+    };
+    const nativeFetch = window.fetch;
+    window.fetch = (url, init) => {
+      if (String(url).endsWith("/recording") && init?.method === "POST") window.__recordingSignal = init.signal;
+      return nativeFetch(url, init);
+    };
+  });
+  let entered;
+  let release;
+  const started = new Promise((resolve) => { entered = resolve; });
+  const held = new Promise((resolve) => { release = resolve; });
+  await page.route(`**/api/sessions/${session.id}/recording`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    entered(); await held; return route.continue();
+  });
+  await page.clock.install();
+  await joinMockInterview(page, baseUrl, session.id);
+  await page.getByRole("button", { name: "End interview" }).click();
+  await page.waitForURL("**/review");
+  await started;
+  // Advance past the old 130-second POST deadline while the download is in flight.
+  await page.clock.fastForward(131_000);
+  assert.equal(await page.evaluate(() => window.__recordingSignal?.aborted), false, "healthy recording POST exceeded its client deadline");
+  await page.getByText("Downloading the recording…").waitFor();
+  assert.equal(await page.getByRole("button", { name: "Retry recording" }).count(), 0);
+  release();
+  await page.locator("audio").waitFor({ timeout: 20_000 });
+  await page.close();
 }
 
 async function runSetupRevision(context, baseUrl, pageErrors) {
@@ -503,11 +650,15 @@ async function main() {
     const pageErrors = [];
 
     await runHappyPath(context, appUrl, mock, pageErrors);
-    await runCheckpointRecovery(context, appUrl, mock, pageErrors);
+    await runCheckpointRecovery(context, appUrl, dataDir, mock, pageErrors);
     await runFreeformPromptFlow(appUrl, mock);
     await runSaveRetry(context, appUrl, pageErrors);
     await runExpiredJobs(context, appUrl, dataDir, mock, pageErrors);
     await runSetupRevision(context, appUrl, pageErrors);
+    await runStartupRetry(context, appUrl, mock, pageErrors);
+    await runStaleTabAndLegacyReview(context, appUrl, dataDir, mock, pageErrors);
+    await runFinalConflict(context, appUrl, pageErrors);
+    await runLongRecordingClient(context, appUrl, pageErrors);
     await assertPublicPromptBoundary(appUrl);
     assert.deepEqual(pageErrors, [], `browser page errors:\n${pageErrors.join("\n")}`);
 

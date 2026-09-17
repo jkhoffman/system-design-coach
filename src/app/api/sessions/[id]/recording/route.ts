@@ -1,21 +1,20 @@
 import { findSession } from "@/lib/sessionLookup";
 import { getRecordingSession } from "@/lib/sessionQueries";
-import { availableRecording, publishRecording, serveRecording } from "@/lib/artifacts";
-import { claimJob, failJob, JOB_TIMING } from "@/lib/sessionJobs";
+import { availableRecording, serveRecording } from "@/lib/artifacts";
+import { claimJob, failJob, runOwnedJob } from "@/lib/sessionJobs";
 import { validSessionId } from "@/lib/schemas";
-import { openAiUrl } from "@/lib/openai";
-import { delay } from "@/lib/async";
+import { downloadRecording } from "@/lib/downloadRecording";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 1830;
 function recordingStatusResponse(row: ReturnType<typeof getRecordingSession>, extra: Record<string, unknown> = {}) {
   return Response.json({ status: row?.recordingStatus ?? "idle", error: row?.recordingError, ...extra });
 }
 
 /** Download the stored GPT-Live recording (stereo WAV) for this session. */
-export async function POST(_request: Request, ctx: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  let row = findSession(id, getRecordingSession);
+  const row = findSession(id, getRecordingSession);
   if (!row) return Response.json({ error: "not found" }, { status: 404 });
   if (row.status !== "ended" && row.status !== "graded") {
     return Response.json({ error: "session has not ended" }, { status: 409 });
@@ -30,33 +29,18 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   if (await availableRecording(id)) {
     return recordingStatusResponse(row, { ok: true });
   }
-  row = getRecordingSession(id)!;
+  const repair = new URL(request.url).searchParams.get("repair") === "true";
+  if (row.recordingPath && !repair) return Response.json({ error: "The saved recording is missing. Explicitly retry to download a replacement." }, { status: 409 });
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "OPENAI_API_KEY not set" }, { status: 503 });
   }
-  const attempt = claimJob(id, "recording");
+  const attempt = claimJob(id, "recording", repair);
   if (!attempt) {
     return recordingStatusResponse(getRecordingSession(id), { ok: false });
   }
 
   try {
-    // Recording finalizes after session.closed — retry briefly if it isn't ready.
-    const signal = AbortSignal.timeout(JOB_TIMING.recording.timeoutMs);
-    let res: Response | null = null;
-    let lastErr = "";
-    for (let retry = 0; retry < 4; retry++) {
-      res = await fetch(openAiUrl(`/live/sessions/${encodeURIComponent(liveSessionId)}/content`), {
-        signal,
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-      });
-      if (res.ok) break;
-      lastErr = await res.text();
-      if (retry < 3) await delay(2500, signal);
-    }
-    if (!res?.ok) {
-      throw new Error(`recording fetch failed: ${res?.status ?? "network error"} ${lastErr}`.trim());
-    }
-    await publishRecording(res, attempt, signal);
+    await runOwnedJob(attempt, (signal) => downloadRecording(attempt, liveSessionId, signal));
     return recordingStatusResponse(getRecordingSession(id), { ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

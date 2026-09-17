@@ -1,3 +1,4 @@
+import { availableRecording } from "@/lib/artifacts";
 import { findSession } from "@/lib/sessionLookup";
 import Link from "next/link";
 import { notFound } from "next/navigation";
@@ -12,7 +13,7 @@ export default async function ReviewPage({ params }: { params: Promise<{ id: str
   const { id } = await params;
   const session = findSession(id, getReviewSession);
   if (!session) notFound();
-  const clientSession = session;
+  const clientSession = { ...session, hasRecording: Boolean(await availableRecording(id)) };
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
@@ -41,7 +42,7 @@ export default async function ReviewPage({ params }: { params: Promise<{ id: str
         </div>
       </div>
 
-      {session.grade ? <ReviewReport grade={session.grade} /> : <GradeGate sessionId={id} />}
+      {session.grade ? <ReviewReport grade={session.grade} /> : <GradeGate sessionId={id} readError={session.gradeReadError} />}
 
       <section className="mt-8">
         <h3 className="mb-3 font-semibold">Replay</h3>

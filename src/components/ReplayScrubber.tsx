@@ -13,8 +13,12 @@ import { fmtMs } from "@/lib/time";
 export default function ReplayScrubber({ session }: { session: ClientSession }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [cursorMs, setCursorMs] = useState(0);
-  const { job, error: recordingError, retry: retryRecording } = useSessionJob(session.id, "recording");
-  const hasRecording = job.status === "done";
+  const [audioError, setAudioError] = useState(false);
+  const initialStatus = session.hasRecording ? "done" : session.recordingStatus === "done" ? "failed" : session.recordingStatus ?? "idle";
+  const { job, error: recordingError, retry: retryRecording } = useSessionJob(session.id, "recording", undefined, {
+    initial: { status: initialStatus, stale: false }, repair: session.recordingStatus === "done",
+  });
+  const hasRecording = session.hasRecording || job.status === "done";
   const recordingStatus = recordingError ? "failed" : job.status;
   const snapshots = session.timeline.filter(
     (e): e is Extract<typeof e, { kind: "snapshot" }> => e.kind === "snapshot"
@@ -34,6 +38,8 @@ export default function ReplayScrubber({ session }: { session: ClientSession }) 
           ref={audioRef}
           controls
           src={`/api/sessions/${session.id}/recording`}
+          onError={() => setAudioError(true)}
+          onLoadedData={() => setAudioError(false)}
           onTimeUpdate={(e) => setCursorMs(e.currentTarget.currentTime * 1000)}
           className="w-full"
         />
@@ -55,6 +61,7 @@ export default function ReplayScrubber({ session }: { session: ClientSession }) 
         </p>
       )}
 
+      {audioError && <p className="text-sm text-red-400">The audio could not be loaded. <button className="underline" onClick={() => { retryRecording(); audioRef.current?.load(); }}>Recheck recording</button></p>}
       {snapshots.length > 0 && (
         <div>
           <h4 className="mb-2 text-sm font-medium text-neutral-400">Board evolution</h4>
