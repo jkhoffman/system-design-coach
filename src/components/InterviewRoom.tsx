@@ -155,8 +155,6 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
   );
 
   const completeAfterSave = useCallback(async () => {
-    // Recording download and grading are independent jobs owned by their routes/UI.
-    void fetch(`/api/sessions/${session.id}/recording`, { method: "POST" }).catch(() => {});
     setPhase("ended");
     router.push(`/interview/${session.id}/review`);
   }, [router, session.id]);

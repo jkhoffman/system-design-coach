@@ -2,13 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import {
-  claimRecording,
-  failRecording,
-  finishRecording,
   getSession,
   RECORDING_DIR,
-  updateSession,
 } from "@/lib/db";
+import { claimJob, failJob, finishRecording, resetMissingRecording, JOB_TIMING } from "@/lib/sessionJobs";
 import { validSessionId } from "@/lib/schemas";
 import { openAiUrl } from "@/lib/openai";
 
@@ -47,38 +44,44 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     return recordingStatusResponse(row, { ok: true });
   }
   if (row.recordingPath) {
-    updateSession(id, { recordingPath: null, recordingStatus: "idle", recordingError: null });
+    resetMissingRecording(id, row.recordingPath);
     row = getSession(id)!;
   }
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "OPENAI_API_KEY not set" }, { status: 503 });
   }
-  if (!claimRecording(id)) {
+  const attempt = claimJob(id, "recording");
+  if (!attempt) {
     return recordingStatusResponse(getSession(id), { ok: false });
   }
 
   try {
     // Recording finalizes after session.closed — retry briefly if it isn't ready.
+    const signal = AbortSignal.timeout(JOB_TIMING.recording.timeoutMs);
     let res: Response | null = null;
     let lastErr = "";
-    for (let attempt = 0; attempt < 4; attempt++) {
+    for (let retry = 0; retry < 4; retry++) {
       res = await fetch(openAiUrl(`/live/sessions/${encodeURIComponent(liveSessionId)}/content`), {
+        signal,
         headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
       });
       if (res.ok) break;
       lastErr = await res.text();
-      if (attempt < 3) await new Promise((r) => setTimeout(r, 2500));
+      if (retry < 3) await new Promise((r) => setTimeout(r, 2500));
     }
     if (!res?.ok) {
       throw new Error(`recording fetch failed: ${res?.status ?? "network error"} ${lastErr}`.trim());
     }
-    const file = recordingFile(id);
+    const file = path.resolve(RECORDING_DIR, `${id}-${attempt.token}.wav`);
     fs.writeFileSync(/* turbopackIgnore: true */ file, Buffer.from(await res.arrayBuffer()));
-    finishRecording(id, file);
+    if (!finishRecording(attempt, file)) {
+      fs.rmSync(file, { force: true });
+      throw new Error("recording attempt expired or superseded");
+    }
     return recordingStatusResponse(getSession(id), { ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    failRecording(id, message);
+    failJob(attempt, message);
     return Response.json({ error: message, status: "failed" }, { status: 502 });
   }
 }

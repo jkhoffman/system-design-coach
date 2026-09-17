@@ -3,7 +3,8 @@ import { test } from "node:test";
 import { databaseFixture } from "./helpers.mjs";
 import { sampleTrace } from "./fixtures.mjs";
 const { db } = await databaseFixture();
-const { claimGrading, claimRecording, createSession, getSession, listSessionSummaries, updateSession } = db;
+const { claimJob } = await import("../src/lib/sessionJobs.ts");
+const { createSession, getSession, listSessionSummaries, updateSession } = db;
 
 test("persistence", () => {
   const session = createSession({
@@ -19,17 +20,17 @@ test("persistence", () => {
     },
     durationSec: 1200,
   });
-  assert.equal(claimGrading(session.id), false);
+  assert.equal(claimJob(session.id, "grade"), null);
   updateSession(session.id, { status: "ended", endedAt: Date.now() });
-  assert.equal(claimGrading(session.id), true);
-  assert.equal(claimGrading(session.id), false);
+  assert.ok(claimJob(session.id, "grade"));
+  assert.equal(claimJob(session.id, "grade"), null);
   assert.equal(getSession(session.id).gradeStatus, "running");
   assert.equal(listSessionSummaries()[0].id, session.id);
   assert.equal(listSessionSummaries()[0].title, "test");
   
   updateSession(session.id, { liveSessionId: "live_test" });
-  assert.equal(claimRecording(session.id), true);
-  assert.equal(claimRecording(session.id), false);
+  assert.ok(claimJob(session.id, "recording"));
+  assert.equal(claimJob(session.id, "recording"), null);
   assert.equal(getSession(session.id).recordingStatus, "running");
   
   

@@ -15,8 +15,6 @@ import type {
   SessionSummary,
 } from "./types";
 
-const GRADING_CLAIM_STALE_MS = 3 * 60 * 1000;
-const RECORDING_CLAIM_STALE_MS = 2 * 60 * 1000;
 
 export function newId(): string {
   return crypto.randomBytes(8).toString("hex");
@@ -182,87 +180,4 @@ export function updateSession(
   getDb()
     .prepare(`UPDATE interview_sessions SET ${sets.join(", ")} WHERE id = ?`)
     .run(...vals);
-}
-
-function changed(result: { changes?: number | bigint }): boolean {
-  return Number(result.changes ?? 0) > 0;
-}
-
-/** Atomically turns an ended, ungraded session into a running grading job. */
-export function claimGrading(id: string): boolean {
-  const now = Date.now();
-  const result = getDb()
-    .prepare(
-      `UPDATE interview_sessions
-       SET grading_status = 'running', grading_started_at = ?, grade_error = NULL
-       WHERE id = ?
-         AND status = 'ended'
-         AND grade IS NULL
-         AND (grading_status != 'running' OR grading_started_at IS NULL OR grading_started_at < ?)`
-    )
-    .run(now, id, now - GRADING_CLAIM_STALE_MS) as { changes?: number | bigint };
-  return changed(result);
-}
-
-export function finishGrading(id: string, grade: GradeReport): boolean {
-  const result = getDb()
-    .prepare(
-      `UPDATE interview_sessions
-       SET grade = ?, grading_status = 'done', grading_started_at = NULL, status = 'graded', grade_error = NULL
-       WHERE id = ? AND grading_status = 'running'`
-    )
-    .run(JSON.stringify(grade), id) as { changes?: number | bigint };
-  return changed(result);
-}
-
-export function failGrading(id: string, error: string): void {
-  updateSession(id, {
-    gradeStatus: "failed",
-    gradeError: error.slice(0, 2000),
-  });
-}
-
-export function claimRecording(id: string): boolean {
-  const now = Date.now();
-  const result = getDb()
-    .prepare(
-      `UPDATE interview_sessions
-       SET recording_status = 'running', recording_started_at = ?, recording_error = NULL
-       WHERE id = ?
-         AND status IN ('ended', 'graded')
-         AND live_session_id IS NOT NULL
-         AND recording_path IS NULL
-         AND (recording_status != 'running' OR recording_started_at IS NULL OR recording_started_at < ?)`
-    )
-    .run(now, id, now - RECORDING_CLAIM_STALE_MS) as { changes?: number | bigint };
-  return changed(result);
-}
-
-export function finishRecording(id: string, recordingPath: string): boolean {
-  const result = getDb()
-    .prepare(
-      `UPDATE interview_sessions
-       SET recording_path = ?, recording_status = 'done', recording_started_at = NULL, recording_error = NULL
-       WHERE id = ? AND recording_status = 'running'`
-    )
-    .run(recordingPath, id) as { changes?: number | bigint };
-  return changed(result);
-}
-
-export function failRecording(id: string, error: string): void {
-  getDb()
-    .prepare(
-      `UPDATE interview_sessions
-       SET recording_status = 'failed', recording_started_at = NULL, recording_error = ?
-       WHERE id = ?`
-    )
-    .run(error.slice(0, 2000), id);
-}
-
-export function markRecordingUnavailable(id: string, reason: string): void {
-  updateSession(id, {
-    recordingPath: "",
-    recordingStatus: "unavailable",
-    recordingError: reason.slice(0, 2000),
-  });
 }

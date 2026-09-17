@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import type { ClientSession, RecordingStatus } from "@/lib/types";
+import { useRef, useState } from "react";
+import type { ClientSession } from "@/lib/types";
+import { useSessionJob } from "./useSessionJob";
 import { fmtMs } from "@/lib/rubric";
 
 /**
@@ -12,87 +13,18 @@ import { fmtMs } from "@/lib/rubric";
 export default function ReplayScrubber({ session }: { session: ClientSession }) {
   const audioRef = useRef<HTMLAudioElement>(null);
   const [cursorMs, setCursorMs] = useState(0);
-  const [hasRecording, setHasRecording] = useState(session.hasRecording);
-  const [recordingStatus, setRecordingStatus] = useState<RecordingStatus>(
-    session.recordingStatus ?? (session.hasRecording ? "done" : "idle")
-  );
-  const [recordingError, setRecordingError] = useState(session.recordingError);
-  const [retrying, setRetrying] = useState(false);
+  const { job, error: recordingError, retry: retryRecording } = useSessionJob(session.id, "recording");
+  const hasRecording = job.status === "done";
+  const recordingStatus = recordingError ? "failed" : job.status;
   const snapshots = session.timeline.filter(
     (e): e is Extract<typeof e, { kind: "snapshot" }> => e.kind === "snapshot"
   );
-
-  useEffect(() => {
-    if (
-      hasRecording ||
-      recordingStatus === "unavailable" ||
-      recordingStatus === "done" ||
-      recordingStatus === "failed"
-    ) return;
-    let cancelled = false;
-    let requested = recordingStatus === "running";
-    let tries = 0;
-
-    const poll = async () => {
-      tries++;
-      try {
-        if (!requested) {
-          requested = true;
-          setRecordingStatus("running");
-          const post = await fetch(`/api/sessions/${session.id}/recording`, { method: "POST" });
-          const postData = (await post.json().catch(() => ({}))) as { error?: string };
-          if (!post.ok && post.status !== 202) {
-            if (!cancelled) {
-              setRecordingStatus("failed");
-              setRecordingError(postData.error ?? `recording download failed (${post.status})`);
-            }
-            return;
-          }
-        }
-        const res = await fetch(`/api/sessions/${session.id}`);
-        if (!res.ok) return;
-        const data = (await res.json()) as { session?: ClientSession };
-        const fresh = data.session;
-        if (!fresh || cancelled) return;
-        setRecordingStatus(fresh.recordingStatus ?? "idle");
-        setRecordingError(fresh.recordingError);
-        if (fresh.hasRecording) {
-          setHasRecording(true);
-          return;
-        }
-      } catch {
-        /* polling retries below */
-      }
-      if (!cancelled && tries < 60) setTimeout(() => void poll(), 3000);
-    };
-
-    void poll();
-    return () => {
-      cancelled = true;
-    };
-  }, [session.id, hasRecording, recordingStatus]);
-
-  const retryRecording = async () => {
-    setRetrying(true);
-    setRecordingError(undefined);
-    try {
-      const res = await fetch(`/api/sessions/${session.id}/recording`, { method: "POST" });
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      if (!res.ok && res.status !== 202) throw new Error(data.error ?? "recording download failed");
-      setRecordingStatus("running");
-    } catch (err) {
-      setRecordingError(err instanceof Error ? err.message : String(err));
-      setRecordingStatus("failed");
-    } finally {
-      setRetrying(false);
-    }
-  };
 
   const seekTo = (ms: number) => {
     const a = audioRef.current;
     if (!a) return;
     a.currentTime = ms / 1000;
-    void a.play();
+    void a.play().catch(() => {});
   };
 
   return (
@@ -105,17 +37,16 @@ export default function ReplayScrubber({ session }: { session: ClientSession }) 
           onTimeUpdate={(e) => setCursorMs(e.currentTarget.currentTime * 1000)}
           className="w-full"
         />
-      ) : recordingStatus === "running" ? (
+      ) : (recordingStatus === "running" || recordingStatus === "idle") ? (
         <p className="text-sm text-neutral-500">Downloading the recording…</p>
       ) : recordingStatus === "failed" ? (
         <div className="text-sm">
           <p className="text-red-400">{recordingError ?? "Recording download failed."}</p>
           <button
             onClick={() => void retryRecording()}
-            disabled={retrying}
             className="mt-2 rounded border border-neutral-700 px-3 py-1 hover:bg-neutral-800 disabled:opacity-50"
           >
-            {retrying ? "Retrying…" : "Retry recording"}
+            Retry recording
           </button>
         </div>
       ) : (

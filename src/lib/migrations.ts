@@ -31,6 +31,12 @@ const migrations: ((db: DatabaseSync) => void)[] = [
     ALTER TABLE interview_sessions ADD COLUMN start_expires_at INTEGER;
     CREATE INDEX interview_sessions_created_at ON interview_sessions(created_at DESC);
   `),
+  (db) => db.exec(`
+    ALTER TABLE interview_sessions ADD COLUMN grading_attempt TEXT;
+    ALTER TABLE interview_sessions ADD COLUMN grading_expires_at INTEGER;
+    ALTER TABLE interview_sessions ADD COLUMN recording_attempt TEXT;
+    ALTER TABLE interview_sessions ADD COLUMN recording_expires_at INTEGER;
+  `),
 ];
 
 export const SCHEMA_VERSION = migrations.length;

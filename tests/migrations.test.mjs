@@ -37,7 +37,7 @@ test("adopts the previous schema with job columns already present", () => {
     migrate(db);
     db.exec("PRAGMA user_version = 0");
     // Simulate the original unversioned schema, including its newer columns.
-    db.exec("ALTER TABLE interview_sessions DROP COLUMN checkpoint_revision; ALTER TABLE interview_sessions DROP COLUMN start_token; ALTER TABLE interview_sessions DROP COLUMN start_expires_at; DROP INDEX interview_sessions_created_at");
+    db.exec("ALTER TABLE interview_sessions DROP COLUMN checkpoint_revision; ALTER TABLE interview_sessions DROP COLUMN start_token; ALTER TABLE interview_sessions DROP COLUMN start_expires_at; ALTER TABLE interview_sessions DROP COLUMN grading_attempt; ALTER TABLE interview_sessions DROP COLUMN grading_expires_at; ALTER TABLE interview_sessions DROP COLUMN recording_attempt; ALTER TABLE interview_sessions DROP COLUMN recording_expires_at; DROP INDEX interview_sessions_created_at");
     migrate(db);
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, SCHEMA_VERSION);
   } finally { db.close(); }

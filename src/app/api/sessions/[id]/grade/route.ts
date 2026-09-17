@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { claimGrading, failGrading, finishGrading, getSession, SNAPSHOT_DIR } from "@/lib/db";
+import { getSession, SNAPSHOT_DIR } from "@/lib/db";
+import { claimJob, failJob, finishGrading, JOB_TIMING } from "@/lib/sessionJobs";
 import { createOpenAIClient } from "@/lib/openai";
 import { buildGradingInput, GRADE_SCHEMA, validateGradeReport } from "@/lib/rubric";
 import { SNAPSHOT_FILE_RE, validSessionId } from "@/lib/schemas";
@@ -21,7 +22,8 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "OPENAI_API_KEY not set" }, { status: 503 });
   }
-  if (!claimGrading(id)) {
+  const attempt = claimJob(id, "grade");
+  if (!attempt) {
     const current = getSession(id);
     if (current?.grade) return Response.json({ grade: current.grade, status: "done" });
     return Response.json(
@@ -83,10 +85,10 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
           strict: true,
         },
       },
-    });
+    }, { signal: AbortSignal.timeout(JOB_TIMING.grade.timeoutMs), timeout: JOB_TIMING.grade.timeoutMs, maxRetries: 0 });
 
     const grade = validateGradeReport(JSON.parse(res.output_text)) as GradeReport;
-    if (!finishGrading(id, grade)) {
+    if (!finishGrading(attempt, grade)) {
       const current = getSession(id);
       if (current?.grade) return Response.json({ grade: current.grade, status: "done" });
       throw new Error("grading claim was lost before the result could be saved");
@@ -94,7 +96,7 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
     return Response.json({ grade, status: "done" });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    failGrading(id, message);
+    failJob(attempt, message);
     return Response.json({ error: message, status: "failed" }, { status: 502 });
   }
 }
