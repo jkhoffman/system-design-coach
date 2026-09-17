@@ -1,3 +1,4 @@
+import { assertStrictFormat } from "./strict-schema-profile.mjs";
 import http from "node:http";
 import { gradeReport, promptSpec } from "./mock-fixtures.mjs";
 
@@ -95,6 +96,7 @@ function openAiResponse(body, output) {
 export async function startMockOpenAI({ host = "127.0.0.1", port = 0, apiKey = "mock-key" } = {}) {
   const counts = {
     liveCreate: 0,
+    liveHangup: 0,
     recordingGet: 0,
     responses: 0,
     gradeResponses: 0,
@@ -129,6 +131,14 @@ export async function startMockOpenAI({ host = "127.0.0.1", port = 0, apiKey = "
         return;
       }
 
+      const hangupMatch = /^\/v1\/live\/sessions\/([^/]+)\/hangup$/.exec(url.pathname);
+      if (request.method === "POST" && hangupMatch) {
+        counts.liveHangup++;
+        const session = liveSessions.get(decodeURIComponent(hangupMatch[1]));
+        if (session) session.closed = true;
+        json(response, session ? 200 : 404, {});
+        return;
+      }
       const recordingMatch = /^\/v1\/live\/sessions\/([^/]+)\/content$/.exec(url.pathname);
       if (request.method === "GET" && recordingMatch) {
         const id = decodeURIComponent(recordingMatch[1]);
@@ -148,6 +158,8 @@ export async function startMockOpenAI({ host = "127.0.0.1", port = 0, apiKey = "
       if (request.method === "POST" && url.pathname === "/v1/responses") {
         const body = JSON.parse(await readBody(request));
         counts.responses++;
+        try { assertStrictFormat(body?.text?.format); }
+        catch (error) { json(response, 400, { error: { message: error.message } }); return; }
         const schemaName = body?.text?.format?.name;
         if (schemaName === "grade_report") {
           counts.gradeResponses++;
