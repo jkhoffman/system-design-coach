@@ -3,15 +3,16 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { PROMPT_LIBRARY } from "@/lib/prompts";
-import type { Briefing, PromptSpec } from "@/lib/types";
+import type { Briefing, Mode, PromptSpec } from "@/lib/types";
 
 const LEVELS = ["L4", "L5", "L6", "Staff"];
 const DURATIONS = [20 * 60, 30 * 60, 45 * 60];
 
 export default function SetupForm() {
   const router = useRouter();
-  const [mode, setMode] = useState<"library" | "custom">("library");
+  const [mode, setMode] = useState<Mode>("library");
   const [promptId, setPromptId] = useState(PROMPT_LIBRARY[0].id);
+  const [description, setDescription] = useState("");
   const [briefing, setBriefing] = useState<Briefing>({
     company: "",
     position: "",
@@ -31,11 +32,14 @@ export default function SetupForm() {
     setBusy("gen");
     setError(null);
     try {
-      const res = await fetch("/api/prompts/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(briefing),
-      });
+      const res = await fetch(
+        mode === "freeform" ? "/api/prompts/expand" : "/api/prompts/generate",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(mode === "freeform" ? { ...briefing, description } : briefing),
+        },
+      );
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "generation failed");
       setGenerated(data.prompt as PromptSpec);
@@ -57,7 +61,7 @@ export default function SetupForm() {
           mode,
           briefing,
           promptId: mode === "library" ? promptId : undefined,
-          prompt: mode === "custom" ? generated : undefined,
+          prompt: mode === "library" ? undefined : generated,
           durationSec,
         }),
       });
@@ -77,18 +81,87 @@ export default function SetupForm() {
 
   const canStart = (mode === "library" || generated !== null) && (!isCustom || customValid);
 
+  const briefingFields = (
+    <div className="grid gap-3 sm:grid-cols-3">
+      <Field label="Company">
+        <input
+          value={briefing.company}
+          onChange={(e) => updateBriefing({ company: e.target.value })}
+          placeholder="e.g. Stripe"
+          className="input"
+        />
+      </Field>
+      <Field label="Position">
+        <input
+          value={briefing.position}
+          onChange={(e) => updateBriefing({ position: e.target.value })}
+          placeholder="e.g. Backend engineer"
+          className="input"
+        />
+      </Field>
+      <Field label="Level">
+        <select
+          value={briefing.level}
+          onChange={(e) => updateBriefing({ level: e.target.value })}
+          className="input"
+        >
+          {LEVELS.map((l) => (
+            <option key={l}>{l}</option>
+          ))}
+        </select>
+      </Field>
+    </div>
+  );
+
+  const generateRow = (
+    <div className="space-y-3">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => void generate()}
+          disabled={
+            busy !== null ||
+            (mode === "freeform"
+              ? !description.trim()
+              : !briefing.company || !briefing.position)
+          }
+          className="rounded-lg border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-800 disabled:opacity-40"
+        >
+          {busy === "gen" ? "Generating…" : generated ? "Regenerate prompt" : "Generate prompt"}
+        </button>
+        {generated && mode === "custom" && (
+          <span className="text-sm text-emerald-400">
+            Ready: “{generated.title}” — revealed when the interviewer speaks.
+          </span>
+        )}
+      </div>
+      {generated && mode === "freeform" && (
+        <div className="rounded-lg border border-emerald-900 bg-emerald-950/30 p-3 text-sm">
+          <div className="font-medium text-emerald-400">{generated.title}</div>
+          <div className="mt-1 text-neutral-300">“{generated.question}”</div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="mx-auto w-full max-w-2xl space-y-6">
       <div className="flex rounded-lg border border-neutral-800 p-1">
-        {(["library", "custom"] as const).map((m) => (
+        {(["library", "custom", "freeform"] as const).map((m) => (
           <button
             key={m}
-            onClick={() => setMode(m)}
+            onClick={() => {
+              setMode(m);
+              setGenerated(null);
+            }}
             className={`flex-1 rounded-md py-2 text-sm font-medium capitalize ${
               mode === m ? "bg-neutral-800 text-white" : "text-neutral-400 hover:text-neutral-200"
             }`}
           >
-            {m === "library" ? "Prompt library" : "Custom (job briefing)"}
+            {m === "library"
+              ? "Prompt library"
+              : m === "custom"
+                ? "Custom (job briefing)"
+                : "Describe your own"}
           </button>
         ))}
       </div>
@@ -142,37 +215,9 @@ export default function SetupForm() {
             </Field>
           </div>
         </div>
-      ) : (
+      ) : mode === "custom" ? (
         <div className="space-y-3">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="Company">
-              <input
-                value={briefing.company}
-                onChange={(e) => updateBriefing({ company: e.target.value })}
-                placeholder="e.g. Stripe"
-                className="input"
-              />
-            </Field>
-            <Field label="Position">
-              <input
-                value={briefing.position}
-                onChange={(e) => updateBriefing({ position: e.target.value })}
-                placeholder="e.g. Backend engineer"
-                className="input"
-              />
-            </Field>
-            <Field label="Level">
-              <select
-                value={briefing.level}
-                onChange={(e) => updateBriefing({ level: e.target.value })}
-                className="input"
-              >
-                {LEVELS.map((l) => (
-                  <option key={l}>{l}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
+          {briefingFields}
           <Field label="Job description (optional — paste for sharper prompts)">
             <textarea
               value={briefing.jobDescription}
@@ -182,20 +227,26 @@ export default function SetupForm() {
               className="input"
             />
           </Field>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => void generate()}
-              disabled={busy !== null || !briefing.company || !briefing.position}
-              className="rounded-lg border border-neutral-700 px-4 py-2 text-sm hover:bg-neutral-800 disabled:opacity-40"
-            >
-              {busy === "gen" ? "Generating…" : generated ? "Regenerate prompt" : "Generate prompt"}
-            </button>
-            {generated && (
-              <span className="text-sm text-emerald-400">
-                Ready: “{generated.title}” — revealed when the interviewer speaks.
-              </span>
-            )}
-          </div>
+          {generateRow}
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <Field label="Describe the interview you want">
+            <textarea
+              value={description}
+              onChange={(e) => {
+                setDescription(e.target.value);
+                setGenerated(null);
+              }}
+              rows={5}
+              placeholder={
+                'e.g. "Design a payments ledger for a marketplace" — or paste a detailed spec with scale, scope, and constraints.'
+              }
+              className="input"
+            />
+          </Field>
+          {briefingFields}
+          {generateRow}
         </div>
       )}
 

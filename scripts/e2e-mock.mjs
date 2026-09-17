@@ -66,6 +66,35 @@ async function createSession(baseUrl) {
   return body.session;
 }
 
+async function runFreeformPromptFlow(baseUrl, mock) {
+  const expandResponse = await fetch(`${baseUrl}/api/prompts/expand`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      description: "Design a ledger service for a marketplace with exactly-once payouts.",
+      level: "L5",
+    }),
+  });
+  const expandBody = await expandResponse.json().catch(() => ({}));
+  assert.equal(expandResponse.status, 200, `prompt expand failed: ${JSON.stringify(expandBody)}`);
+  assert.ok(expandBody.prompt?.factSheet?.length, "expanded prompt has no fact sheet");
+
+  const response = await fetch(`${baseUrl}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mode: "freeform",
+      briefing: { company: "", position: "", level: "L5" },
+      prompt: expandBody.prompt,
+      durationSec: 300,
+    }),
+  });
+  const body = await response.json().catch(() => ({}));
+  assert.equal(response.status, 200, `freeform session create failed: ${JSON.stringify(body)}`);
+  assert.equal(body.session?.mode, "freeform", "freeform session mode not persisted");
+  assert.equal(mock.counts.promptResponses, 1, "expected exactly one prompt-spec generation call");
+}
+
 async function getSession(baseUrl, id) {
   const response = await fetch(`${baseUrl}/api/sessions/${id}`);
   const body = await response.json().catch(() => ({}));
@@ -349,6 +378,7 @@ async function main() {
 
     await runHappyPath(context, appUrl, mock, pageErrors);
     await runCheckpointRecovery(context, appUrl, mock, pageErrors);
+    await runFreeformPromptFlow(appUrl, mock);
     assert.deepEqual(pageErrors, [], `browser page errors:\n${pageErrors.join("\n")}`);
 
     console.log("mock E2E passed");

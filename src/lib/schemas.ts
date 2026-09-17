@@ -17,6 +17,10 @@ export const GenerateBriefingSchema = BriefingSchema.extend({
   position: z.string().trim().min(1).max(120),
 });
 
+export const ExpandPromptSchema = BriefingSchema.extend({
+  description: z.string().trim().min(1).max(20_000),
+});
+
 export const FactSheetEntrySchema = z.object({
   q: z.string().trim().min(1).max(1000),
   a: z.string().trim().min(1).max(2000),
@@ -114,7 +118,7 @@ export const SessionPatchSchema = z.discriminatedUnion("kind", [
 ]);
 
 export const CreateSessionSchema = z.object({
-  mode: z.enum(["library", "custom"]),
+  mode: z.enum(["library", "custom", "freeform"]),
   briefing: BriefingSchema,
   promptId: z.string().trim().max(80).optional(),
   prompt: PromptSpecSchema.optional(),

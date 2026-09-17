@@ -53,8 +53,9 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:3000 — pick a library prompt or generate one from a
-company/role briefing, then join with mic + speaker.
+Open http://localhost:3000 — pick a library prompt, generate one from a
+company/role briefing, or describe the interview you want in your own words
+(it gets expanded into a full prompt spec), then join with mic + speaker.
 
 ## Testing
 

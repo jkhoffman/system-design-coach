@@ -1,6 +1,6 @@
 import type { LiveTraceEvent } from "./liveTrace";
 
-export type Mode = "library" | "custom";
+export type Mode = "library" | "custom" | "freeform";
 
 export interface Briefing {
   company: string;

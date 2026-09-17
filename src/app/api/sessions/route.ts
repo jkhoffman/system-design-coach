@@ -20,7 +20,7 @@ export async function POST(request: Request) {
     } else {
       prompt = body.prompt;
       if (!prompt) {
-        return Response.json({ error: "custom mode requires a generated prompt" }, { status: 400 });
+        return Response.json({ error: "custom/freeform mode requires a prompt" }, { status: 400 });
       }
     }
 

@@ -17,7 +17,9 @@ const {
   listSessionSummaries,
   updateSession,
 } = await import("../src/lib/db.ts");
-const { SessionPatchSchema } = await import("../src/lib/schemas.ts");
+const { SessionPatchSchema, CreateSessionSchema, ExpandPromptSchema } = await import(
+  "../src/lib/schemas.ts"
+);
 const { analyzeLiveTrace } = await import("../src/lib/liveTraceAnalysis.ts");
 
 const shape = (id, x) => ({ id, type: "rectangle", x, y: 0, width: 100, height: 50 });
@@ -225,5 +227,26 @@ assert.throws(() =>
     timeline: [{ kind: "snapshot", startMs: 0, label: "bad", file: "../outside.png" }],
   })
 );
+
+const freeformBody = CreateSessionSchema.parse({
+  mode: "freeform",
+  briefing: { level: "L5" },
+  prompt: {
+    id: "x",
+    title: "t",
+    question: "q",
+    context: "",
+    factSheet: [{ q: "q", a: "a" }],
+    deepDiveAngles: ["a"],
+  },
+  durationSec: 1200,
+});
+assert.equal(freeformBody.mode, "freeform");
+assert.equal(
+  ExpandPromptSchema.parse({ level: "L5", description: "  design a ledger  " }).description,
+  "design a ledger"
+);
+assert.throws(() => ExpandPromptSchema.parse({ level: "L5", description: "   " }));
+assert.throws(() => ExpandPromptSchema.parse({ description: "design a ledger" }));
 
 console.log("pure checks passed");
