@@ -3,9 +3,9 @@ import path from "node:path";
 import { getSession, SNAPSHOT_DIR } from "@/lib/db";
 import { claimJob, failJob, finishGrading, JOB_TIMING } from "@/lib/sessionJobs";
 import { createOpenAIClient } from "@/lib/openai";
-import { buildGradingInput, GRADE_SCHEMA, validateGradeReport } from "@/lib/rubric";
+import { buildGradingInput, validateGradeReport } from "@/lib/rubric";
 import { SNAPSHOT_FILE_RE, validSessionId } from "@/lib/schemas";
-import type { GradeReport } from "@/lib/types";
+import { GRADE_FORMAT } from "@/lib/modelFormats";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -77,17 +77,10 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
           content: [{ type: "input_text", text }, ...imageParts],
         },
       ],
-      text: {
-        format: {
-          type: "json_schema",
-          name: "grade_report",
-          schema: GRADE_SCHEMA,
-          strict: true,
-        },
-      },
+      text: { format: GRADE_FORMAT },
     }, { signal: AbortSignal.timeout(JOB_TIMING.grade.timeoutMs), timeout: JOB_TIMING.grade.timeoutMs, maxRetries: 0 });
 
-    const grade = validateGradeReport(JSON.parse(res.output_text)) as GradeReport;
+    const grade = validateGradeReport(JSON.parse(res.output_text));
     if (!finishGrading(attempt, grade)) {
       const current = getSession(id);
       if (current?.grade) return Response.json({ grade: current.grade, status: "done" });

@@ -69,7 +69,7 @@ function isFunctionCall(e: LiveTraceEvent): boolean {
 
 function isToolResult(e: LiveTraceEvent): boolean {
   return (
-    e.dir === "out" &&
+    e.dir === "out" && e.sent !== false &&
     e.type === "response.item.create" &&
     e.itemType === "function_call_output"
   );
@@ -155,7 +155,11 @@ export function analyzeLiveTrace(
   events: readonly LiveTraceEvent[],
   options: { gapThresholdMs?: number } = {}
 ): LiveTraceAnalysis {
-  const sorted = [...events].sort((a, b) => a.seq - b.seq || a.atPerfMs - b.atPerfMs);
+  const anchored = events.find((event) => event.type === "session.started")
+    ?? events.find((event) => event.sessionMs !== undefined);
+  const origin = anchored ? anchored.atPerfMs - (anchored.sessionMs ?? 0) : 0;
+  const sorted = events.map((event) => ({ ...event, sessionMs: event.atPerfMs - origin }))
+    .sort((a, b) => a.seq - b.seq || a.atPerfMs - b.atPerfMs);
   const threshold = options.gapThresholdMs ?? DEFAULT_GAP_THRESHOLD_MS;
   const counts: Record<LiveTraceDirection, number> = { in: 0, out: 0, local: 0 };
   const eventTypes: Record<string, number> = {};
@@ -185,7 +189,7 @@ export function analyzeLiveTrace(
     : -1;
   const firstToolResult = firstToolResultIndex >= 0 ? sorted[firstToolResultIndex] : undefined;
   const firstContinuationIndex = firstToolResult
-    ? (firstAfter(sorted, firstToolResultIndex, (e) => e.dir === "out" && e.type === "response.create")
+    ? (firstAfter(sorted, firstToolResultIndex, (e) => e.dir === "out" && e.sent !== false && e.type === "response.create")
         ?.index ?? -1)
     : -1;
   const firstContinuation = firstContinuationIndex >= 0 ? sorted[firstContinuationIndex] : undefined;
@@ -233,9 +237,11 @@ export function analyzeLiveTrace(
   ];
 
   const appendLatencies: LiveTraceAnalysis["appendLatencies"] = [];
+  const matchedAcks = new Set<LiveTraceEvent>();
   for (let i = 0; i < sorted.length; i++) {
     const sent = sorted[i];
-    if (sent.dir !== "out") continue;
+    if (sent.dir !== "out" || sent.sent === false) continue;
+    const sentId = sent.eventId ?? sent.clientEventId;
     const ackType = appendAckFor(sent.type);
     if (!ackType) continue;
     const ack = firstAfter(
@@ -244,13 +250,15 @@ export function analyzeLiveTrace(
       (e) =>
         e.dir === "in" &&
         e.type === ackType &&
-        (!sent.clientEventId || !e.eventId || e.eventId === sent.clientEventId)
+        !matchedAcks.has(e) &&
+        (sentId ? (e.clientEventId ?? e.eventId) === sentId : !e.clientEventId && !e.eventId)
     )?.event;
     if (ack) {
+      matchedAcks.add(ack);
       appendLatencies.push({
         type: sent.type,
         durationMs: eventMs(ack) - eventMs(sent),
-        clientEventId: sent.clientEventId,
+        clientEventId: sentId,
       });
     }
   }
@@ -309,7 +317,7 @@ export function analyzeLiveTrace(
     ["delegation", (e) => e.type === "session.delegation.created"],
     ["nested response.created", isNestedResponseCreated],
     ["tool result", isToolResult],
-    ["continuation response.create", (e) => e.dir === "out" && e.type === "response.create"],
+    ["continuation response.create", (e) => e.dir === "out" && e.sent !== false && e.type === "response.create"],
     ["nested response.completed", isNestedResponseCompleted],
     ["session.closed", (e) => e.type === "session.closed"],
   ];

@@ -1,3 +1,4 @@
+import { GradeReportSchema } from "./schemas";
 import type { Briefing, GradeReport, PromptSpec, TimelineEvent, TranscriptTurn } from "./types";
 
 export interface RubricDimension {
@@ -163,7 +164,7 @@ export function fmtMs(ms: number): string {
 }
 
 export function validateGradeReport(input: unknown): GradeReport {
-  const grade = input as GradeReport;
+  const grade = GradeReportSchema.parse(input);
   const expected = new Map(RUBRIC.map((d) => [d.key, d]));
   if (!grade || typeof grade !== "object" || !Array.isArray(grade.dimensions)) {
     throw new Error("grader returned malformed report");
@@ -204,86 +205,3 @@ export function validateGradeReport(input: unknown): GradeReport {
   };
 }
 
-export const GRADE_SCHEMA = {
-  type: "object",
-  properties: {
-    overall: {
-      type: "object",
-      properties: {
-        score: { type: "number", minimum: 1, maximum: 5 },
-        signal: {
-          type: "string",
-          enum: ["strong_no_hire", "no_hire", "lean_no_hire", "lean_hire", "hire", "strong_hire"],
-        },
-        summary: { type: "string" },
-      },
-      required: ["score", "signal", "summary"],
-      additionalProperties: false,
-    },
-    dimensions: {
-      type: "array",
-      minItems: 6,
-      maxItems: 6,
-      items: {
-        type: "object",
-        properties: {
-          key: { type: "string", enum: ["scoping", "architecture", "depth", "tradeoffs", "communication", "pacing"] },
-          label: { type: "string" },
-          score: { type: "number", minimum: 1, maximum: 5 },
-          weight: { type: "number" },
-          evidence: { type: "string" },
-          moments: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: { startMs: { type: "number" }, note: { type: "string" } },
-              required: ["startMs", "note"],
-              additionalProperties: false,
-            },
-          },
-        },
-        required: ["key", "label", "score", "weight", "evidence", "moments"],
-        additionalProperties: false,
-      },
-    },
-    tradeoffAudit: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          choice: { type: "string" },
-          alternativeStated: { type: "boolean" },
-          reasonStated: { type: "boolean" },
-          startMs: { type: ["number", "null"] },
-        },
-        required: ["choice", "alternativeStated", "reasonStated", "startMs"],
-        additionalProperties: false,
-      },
-    },
-    strengths: { type: "array", items: { type: "string" } },
-    antiPatterns: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          startMs: { type: ["number", "null"] },
-          description: { type: "string" },
-        },
-        required: ["startMs", "description"],
-        additionalProperties: false,
-      },
-    },
-    strongHireWouldHave: { type: "array", items: { type: "string" } },
-    drills: { type: "array", items: { type: "string" } },
-  },
-  required: [
-    "overall",
-    "dimensions",
-    "tradeoffAudit",
-    "strengths",
-    "antiPatterns",
-    "strongHireWouldHave",
-    "drills",
-  ],
-  additionalProperties: false,
-} as const;

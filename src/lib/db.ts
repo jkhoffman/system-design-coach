@@ -1,5 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
+import { sanitizeTrace } from "./traceContracts";
+import { normalizeLegacyGrade } from "./legacyContracts";
 import { getDb } from "./database";
 export { closeDb, SNAPSHOT_DIR, RECORDING_DIR } from "./database";
 import type {
@@ -63,10 +65,10 @@ function toRow(r: RawRow): SessionRow {
     recordingError: r.recording_error ?? undefined,
     transcript: JSON.parse(r.transcript) as TranscriptTurn[],
     timeline: JSON.parse(r.timeline) as TimelineEvent[],
-    liveTrace: r.live_trace ? (JSON.parse(r.live_trace) as SessionRow["liveTrace"]) : [],
+    liveTrace: r.live_trace ? (sanitizeTrace(JSON.parse(r.live_trace)) ?? []) : [],
     finalScene: r.final_scene ? JSON.parse(r.final_scene) : undefined,
     finalImage: r.final_image ?? undefined,
-    grade: r.grade ? (JSON.parse(r.grade) as GradeReport) : undefined,
+    grade: r.grade ? normalizeLegacyGrade(JSON.parse(r.grade)) : undefined,
     gradeStatus: (r.grading_status ?? "idle") as GradeStatus,
     gradeError: r.grade_error ?? undefined,
   };

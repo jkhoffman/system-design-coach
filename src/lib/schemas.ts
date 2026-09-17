@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { TraceInputSchema } from "./traceContracts";
+export { LiveTraceEventSchema, LiveTraceSchema } from "./traceContracts";
 
 export const SESSION_ID_RE = /^[a-f0-9]{16}$/;
 export const SNAPSHOT_FILE_RE = /^\d{1,10}\.png$/;
@@ -70,61 +72,34 @@ export const TimelineEventSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
-export const LiveTraceEventSchema = z.looseObject({
-  seq: z.number().finite(),
-  dir: z.enum(["in", "out", "local"]),
-  atPerfMs: z.number().finite().min(0),
-  sessionMs: z.number().finite().min(0).optional(),
-  type: z.string().max(120),
-  innerType: z.string().max(120).optional(),
-  eventId: z.string().max(200).optional(),
-  clientEventId: z.string().max(200).optional(),
-  delegationId: z.string().max(200).optional(),
-  responseId: z.string().max(200).optional(),
-  callId: z.string().max(200).optional(),
-  itemType: z.string().max(120).optional(),
-  toolName: z.string().max(120).optional(),
-  speaker: z.enum(["candidate", "interviewer"]).optional(),
-  startMs: z.number().finite().min(0).optional(),
-  endMs: z.number().finite().min(0).optional(),
-  offsetMs: z.number().finite().min(0).optional(),
-  bytes: z.number().int().min(0).optional(),
-  hasImage: z.boolean().optional(),
-  imageBytes: z.number().int().min(0).optional(),
-  sent: z.boolean().optional(),
-  textPreview: z.string().max(500).optional(),
-  detail: z.string().max(500).optional(),
-  error: z.string().max(2000).optional(),
-});
-
-export const LiveTraceSchema = z.array(LiveTraceEventSchema).max(20_000);
-
 export const SessionPatchSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("progress"),
     revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     transcript: z.array(TranscriptTurnSchema).max(20_000),
     timeline: z.array(TimelineEventSchema).max(50_000),
-    liveTrace: LiveTraceSchema.optional(),
+    liveTrace: TraceInputSchema,
   }),
   z.object({
     kind: z.literal("finish"),
     endedAt: z.number().int().positive(),
     transcript: z.array(TranscriptTurnSchema).max(20_000),
     timeline: z.array(TimelineEventSchema).max(50_000),
-    liveTrace: LiveTraceSchema.optional(),
+    liveTrace: TraceInputSchema,
     finalScene: z.array(z.unknown()).max(50_000).optional(),
     finalImage: z.string().max(MAX_PNG_DATA_URL_CHARS).regex(/^data:image\/(png|jpeg|webp);base64,/).nullable().optional(),
   }),
 ]);
 
-export const CreateSessionSchema = z.object({
-  mode: z.enum(["library", "custom", "freeform"]),
+const SessionSetupSchema = z.object({
   briefing: BriefingSchema,
-  promptId: z.string().trim().max(80).optional(),
-  prompt: PromptSpecSchema.optional(),
   durationSec: z.number().int().min(5 * 60).max(120 * 60),
 });
+export const CreateSessionSchema = z.discriminatedUnion("mode", [
+  SessionSetupSchema.extend({ mode: z.literal("library"), promptId: z.string().trim().min(1).max(80) }),
+  SessionSetupSchema.extend({ mode: z.literal("custom"), prompt: PromptSpecSchema }),
+  SessionSetupSchema.extend({ mode: z.literal("freeform"), prompt: PromptSpecSchema }),
+]);
 
 export const LiveSessionRequestSchema = z.object({
   sessionId: z.string().regex(SESSION_ID_RE),
@@ -143,3 +118,25 @@ export const SnapshotRequestSchema = z.object({
 export function validSessionId(id: string): boolean {
   return SESSION_ID_RE.test(id);
 }
+
+const gradeText = z.string().max(20_000);
+const gradeTime = z.number().finite().min(0);
+export const DimensionScoreSchema = z.object({
+  key: z.enum(["scoping", "architecture", "depth", "tradeoffs", "communication", "pacing"]),
+  label: gradeText, score: z.number().min(1).max(5), weight: z.number().min(0).max(1),
+  evidence: gradeText,
+  moments: z.array(z.object({ startMs: gradeTime, note: gradeText })),
+});
+export const TradeoffAuditEntrySchema = z.object({
+  choice: gradeText, alternativeStated: z.boolean(), reasonStated: z.boolean(), startMs: gradeTime.nullable(),
+});
+export const GradeReportSchema = z.object({
+  overall: z.object({ score: z.number().min(1).max(5),
+    signal: z.enum(["strong_no_hire", "no_hire", "lean_no_hire", "lean_hire", "hire", "strong_hire"]),
+    summary: gradeText }),
+  dimensions: z.array(DimensionScoreSchema).length(6),
+  tradeoffAudit: z.array(TradeoffAuditEntrySchema),
+  strengths: z.array(gradeText),
+  antiPatterns: z.array(z.object({ startMs: gradeTime.nullable(), description: gradeText })),
+  strongHireWouldHave: z.array(gradeText), drills: z.array(gradeText),
+});

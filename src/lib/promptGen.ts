@@ -2,27 +2,7 @@ import { createOpenAIClient } from "./openai";
 import type { Briefing, PromptSpec } from "./types";
 import { newId } from "./db";
 import { PromptSpecSchema } from "./schemas";
-
-const JSON_SCHEMA = {
-  type: "object",
-  properties: {
-    title: { type: "string" },
-    question: { type: "string" },
-    context: { type: "string" },
-    factSheet: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: { q: { type: "string" }, a: { type: "string" } },
-        required: ["q", "a"],
-        additionalProperties: false,
-      },
-    },
-    deepDiveAngles: { type: "array", items: { type: "string" } },
-  },
-  required: ["title", "question", "context", "factSheet", "deepDiveAngles"],
-  additionalProperties: false,
-} as const;
+import { PROMPT_FORMAT } from "./modelFormats";
 
 const GEN_INSTRUCTIONS = `You write system design interview questions used in real loops at top tech companies.
 
@@ -54,14 +34,7 @@ async function runSpecGeneration(instructions: string, input: string): Promise<P
     model: process.env.PROMPT_GEN_MODEL ?? "gpt-5.6-terra",
     instructions,
     input,
-    text: {
-      format: {
-        type: "json_schema",
-        name: "prompt_spec",
-        schema: JSON_SCHEMA,
-        strict: true,
-      },
-    },
+    text: { format: PROMPT_FORMAT },
   });
 
   const parsed = PromptSpecSchema.omit({ id: true }).parse(JSON.parse(res.output_text));

@@ -1,4 +1,4 @@
-// Compile application TypeScript in memory for Node's test runner. The normal
+// Compile application TypeScript in memory for Node tests and maintenance scripts. The normal
 // typecheck command remains responsible for type safety; tests use the same code
 // as Next without writing build artifacts or depending on its server runtime.
 import fs from "node:fs";

@@ -1,34 +1,7 @@
-export type LiveTraceDirection = "in" | "out" | "local";
+import { sanitizeTraceEvent, MAX_TRACE_EVENTS, TRACE_LIMITS, type LiveTraceEvent } from "./traceContracts";
+export type { LiveTraceEvent, LiveTraceDirection } from "./traceContracts";
 
-export interface LiveTraceEvent {
-  seq: number;
-  dir: LiveTraceDirection;
-  atPerfMs: number;
-  sessionMs?: number;
-  type: string;
-  innerType?: string;
-  eventId?: string;
-  clientEventId?: string;
-  delegationId?: string;
-  responseId?: string;
-  callId?: string;
-  itemType?: string;
-  toolName?: string;
-  speaker?: "candidate" | "interviewer";
-  startMs?: number;
-  endMs?: number;
-  offsetMs?: number;
-  bytes?: number;
-  hasImage?: boolean;
-  imageBytes?: number;
-  sent?: boolean;
-  textPreview?: string;
-  detail?: string;
-  error?: string;
-}
-
-const MAX_TRACE_EVENTS = 10_000;
-const MAX_PREVIEW_CHARS = 300;
+const MAX_PREVIEW_CHARS = TRACE_LIMITS.preview;
 
 type JsonObject = Record<string, unknown>;
 
@@ -88,15 +61,17 @@ export class LiveTrace {
   }
 
   private push(event: Omit<LiveTraceEvent, "seq" | "atPerfMs" | "sessionMs">): void {
-    this.events.push({
+    const clean = sanitizeTraceEvent({
       seq: this.seq++,
       atPerfMs: performance.now(),
       sessionMs: this.sessionMs(),
       ...event,
     });
-    if (this.events.length > MAX_TRACE_EVENTS) {
+    if (!clean) return;
+    this.events.push(clean);
+    if (this.events.length >= MAX_TRACE_EVENTS) {
       const preserve = new Set(["connect.start", "session.started"]);
-      let excess = this.events.length - MAX_TRACE_EVENTS;
+      let excess = this.events.length - MAX_TRACE_EVENTS + 1;
       for (let i = 0; i < this.events.length && excess > 0; i++) {
         if (preserve.has(this.events[i].type)) continue;
         this.events.splice(i, 1);
@@ -115,7 +90,9 @@ export class LiveTrace {
   incoming(raw: string): void {
     let ev: JsonObject;
     try {
-      ev = JSON.parse(raw) as JsonObject;
+      const parsed = asObject(JSON.parse(raw));
+      if (!parsed) throw new Error("protocol event must be an object");
+      ev = parsed;
     } catch (error) {
       this.push({
         dir: "in",
@@ -126,7 +103,7 @@ export class LiveTrace {
       return;
     }
 
-    if (ev.type === "session.started") this.sessionT0 = performance.now();
+    if (ev.type === "session.started" && this.sessionT0 == null) this.sessionT0 = performance.now();
     const inner = asObject(ev.event);
     const innerItem = asObject(inner?.item);
     const item = asObject(ev.item) ?? innerItem;

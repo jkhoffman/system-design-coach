@@ -1,49 +1,24 @@
 import type { LiveTraceEvent } from "./liveTrace";
 
-export type Mode = "library" | "custom" | "freeform";
+import type { z } from "zod";
+import type { BriefingSchema, PromptSpecSchema, FactSheetEntrySchema, TranscriptTurnSchema,
+  TimelineEventSchema, GradeReportSchema, DimensionScoreSchema, TradeoffAuditEntrySchema, CreateSessionSchema,
+} from "./schemas";
 
-export interface Briefing {
-  company: string;
-  position: string;
-  level: string;
-  jobDescription?: string;
-}
-
-export interface FactSheetEntry {
-  q: string;
-  a: string;
-}
-
-export interface PromptSpec {
-  id: string;
-  title: string;
-  /** The exact question the interviewer delivers. */
-  question: string;
-  /** One-paragraph scenario framing. */
-  context: string;
-  /** Hidden ground truth for clarifying questions. */
-  factSheet: FactSheetEntry[];
-  /** Angles the interviewer should push on in deep-dive phase. */
-  deepDiveAngles: string[];
-}
+export type Mode = z.infer<typeof CreateSessionSchema>["mode"];
+export type Briefing = z.infer<typeof BriefingSchema>;
+export type PromptSpec = z.infer<typeof PromptSpecSchema>;
+export type FactSheetEntry = z.infer<typeof FactSheetEntrySchema>;
+export type TranscriptTurn = z.infer<typeof TranscriptTurnSchema>;
+export type TimelineEvent = z.infer<typeof TimelineEventSchema>;
+export type GradeReport = z.infer<typeof GradeReportSchema>;
+export type DimensionScore = z.infer<typeof DimensionScoreSchema>;
+export type TradeoffAuditEntry = z.infer<typeof TradeoffAuditEntrySchema>;
 
 export type Speaker = "candidate" | "interviewer";
 export type SessionStatus = "created" | "live" | "ended" | "graded";
 export type GradeStatus = "idle" | "running" | "done" | "failed";
 export type RecordingStatus = "idle" | "running" | "done" | "failed" | "unavailable";
-
-export interface TranscriptTurn {
-  speaker: Speaker;
-  startMs: number;
-  endMs: number;
-  text: string;
-}
-
-export type TimelineEvent =
-  | { kind: "turn"; startMs: number; endMs: number; speaker: Speaker; text: string }
-  | { kind: "board"; startMs: number; summary: string }
-  | { kind: "marker"; startMs: number; label: string }
-  | { kind: "snapshot"; startMs: number; label: string; file: string };
 
 export interface SessionRow {
   id: string;
@@ -68,23 +43,6 @@ export interface SessionRow {
   finalScene?: unknown;
   finalImage?: string;
   grade?: GradeReport;
-}
-
-export interface DimensionScore {
-  key: string;
-  label: string;
-  /** 1-5 */
-  score: number;
-  weight: number;
-  evidence: string;
-  moments: { startMs: number; note: string }[];
-}
-
-export interface TradeoffAuditEntry {
-  choice: string;
-  alternativeStated: boolean;
-  reasonStated: boolean;
-  startMs: number | null;
 }
 
 export interface ClientSession {
@@ -120,22 +78,3 @@ export interface SessionSummary {
   score?: number;
 }
 
-export interface GradeReport {
-  overall: {
-    score: number;
-    signal:
-      | "strong_no_hire"
-      | "no_hire"
-      | "lean_no_hire"
-      | "lean_hire"
-      | "hire"
-      | "strong_hire";
-    summary: string;
-  };
-  dimensions: DimensionScore[];
-  tradeoffAudit: TradeoffAuditEntry[];
-  strengths: string[];
-  antiPatterns: { startMs: number | null; description: string }[];
-  strongHireWouldHave: string[];
-  drills: string[];
-}

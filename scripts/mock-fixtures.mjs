@@ -1,4 +1,5 @@
-import { RUBRIC } from "../src/lib/rubric.ts";
+import "./register-source.mjs";
+const { RUBRIC } = await import("../src/lib/rubric.ts");
 
 export function gradeReport() {
   return {

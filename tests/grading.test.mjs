@@ -22,7 +22,7 @@ test("grading", () => {
   assert.match(gradingInput, /approximately 20 minutes/);
   
   const validGrade = {
-    overall: { score: 9.9, signal: "hire", summary: "solid" },
+    overall: { score: 4.9, signal: "hire", summary: "solid" },
     dimensions: RUBRIC.map((d) => ({
       key: d.key,
       label: d.label,
