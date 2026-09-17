@@ -13,7 +13,7 @@ export interface ExcalidrawElementLike {
   width: number;
   height: number;
   containerId?: string | null;
-  boundElements?: { type: string; id: string }[] | null;
+  boundElements?: readonly { type: string; id: string }[] | null;
   startBinding?: { elementId: string } | null;
   endBinding?: { elementId: string } | null;
   text?: string;

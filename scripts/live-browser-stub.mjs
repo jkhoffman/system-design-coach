@@ -105,6 +105,8 @@ export function installLiveBrowserStub(options = {}) {
       state.sentTypes.push(message.type);
       state.sent.push({
         type: message.type,
+        callId: message.item?.call_id,
+        image: content?.find?.((part) => part.type === "input_image")?.image_url,
         itemType: message.item?.type,
         hasImage:
           Array.isArray(content) && content.some((part) => part?.type === "input_image"),
@@ -152,7 +154,7 @@ export function installLiveBrowserStub(options = {}) {
           for (let call = 0; call < (options.overlappingToolCalls ?? 1); call++) {
           state.toolCalls++;
           this.emit({ type: "session.delegation.created", delegation_id: `delegation_${state.boardSummaries}_${call}` });
-          this.emit({ type: "response.event", event: { type: "response.created" } });
+          this.emit({ type: "response.event", delegation_id: `delegation_${state.boardSummaries}_${call}`, event: { type: "response.created", response: { id: `response_${state.boardSummaries}_${call}` } } });
           this.emit({
             type: "response.event",
             event: {
@@ -187,7 +189,10 @@ export function installLiveBrowserStub(options = {}) {
       if (message.type === "response.create") {
         state.backendRuns++;
         if (state.boardSummaries > 0) {
-          this.emit({ type: "response.event", event: { type: "response.completed" } });
+          for (let call = 0; call < (options.overlappingToolCalls ?? 1); call++) {
+            this.emit({ type: "response.event", delegation_id: `delegation_${state.boardSummaries}_${call}`, event: { type: "response.completed", response: { id: `response_${state.boardSummaries}_${call}` } } });
+          }
+          this.emit({ type: "response.completed" });
           this.emitTranscript(
             "interviewer",
             "I can see the client feeding the API layer; tell me how the write path handles duplicates.",

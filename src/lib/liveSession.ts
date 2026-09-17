@@ -1,4 +1,6 @@
 import { LiveTrace, type LiveTraceEvent } from "./liveTrace";
+import { bounded } from "./async";
+import { LiveActivity, parseLiveEvent, type LiveEvent } from "./liveProtocol";
 
 /**
  * LiveTransport abstracts the voice-interview session so a different backend
@@ -7,6 +9,8 @@ import { LiveTrace, type LiveTraceEvent } from "./liveTrace";
  */
 
 export type Speaker = "candidate" | "interviewer";
+
+export interface ToolResult { output: string; image?: { dataUrl: string; note: string } }
 
 export interface LiveEvents {
   onStatus(status: "connecting" | "live" | "thinking" | "ended" | "error", detail?: string): void;
@@ -17,7 +21,7 @@ export interface LiveEvents {
   /** Cumulative voice-usage seconds reported by the session. */
   onUsageSeconds(sec: number): void;
   /** A delegation backend function call. Return the string result to send back. */
-  onToolCall(name: string, args: Record<string, unknown>): Promise<string>;
+  onToolCall(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<ToolResult | string>;
   onEnded(reason: string): void;
 }
 
@@ -30,37 +34,12 @@ export interface LiveTransport {
   sendThinking(content: string): void;
   sendInstructions(content: string): void;
   sendCommentary(content: string): void;
-  /** Queue a compact whiteboard image into the delegation context (data URL). */
-  queueBoardImage(dataUrl: string, note: string): void;
   mute(): void;
   unmute(): void;
   close(graceful?: boolean): Promise<void>;
   traceSnapshot(): LiveTraceEvent[];
   markLocal(type: string, detail?: string): void;
 }
-
-type LiveEvent = {
-  type: string;
-  event_id?: string;
-  delta?: string;
-  start_ms?: number;
-  end_ms?: number;
-  delegation_id?: string | null;
-  session?: { id?: string };
-  usage?: Record<string, unknown>;
-  reason?: string;
-  event?: {
-    type: string;
-    item?: {
-      type?: string;
-      call_id?: string;
-      name?: string;
-      arguments?: string;
-    };
-  };
-  error?: { message?: string };
-  message?: string;
-};
 
 let counter = 0;
 const eid = (p: string) => `${p}_${Date.now().toString(36)}_${counter++}`;
@@ -71,10 +50,16 @@ export class GptLiveTransport implements LiveTransport {
   private mic: MediaStream | null = null;
   private audioEl: HTMLAudioElement | null = null;
   private t0: number | null = null;
-  private pendingCalls = 0;
-  private toolCallDepth = 0;
-  private queuedBoardImages: { dataUrl: string; note: string }[] = [];
+  private activity = new LiveActivity();
+  private activeTools = new Set<string>();
+  private seenTools = new Set<string>();
+  private toolResults: { callId: string; result: ToolResult }[] = [];
+  private lifetime = new AbortController();
+  private closePromise: Promise<void> | null = null;
+  private startWaiter: (() => void) | null = null;
+  private cleanups = new Set<() => void>();
   private closing = false;
+  private forceClose = false;
   private sessionStarted = false;
   private sessionClosed = false;
   private endedNotified = false;
@@ -85,7 +70,8 @@ export class GptLiveTransport implements LiveTransport {
 
   constructor(
     private sessionDbId: string,
-    private ev: LiveEvents
+    private ev: LiveEvents,
+    private timing = { startupMs: 60_000, closeMs: 10_000, toolMs: 10_000 }
   ) {}
 
   sessionT0(): number | null {
@@ -109,15 +95,28 @@ export class GptLiveTransport implements LiveTransport {
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
+    const startup = new AbortController();
+    const timeout = setTimeout(() => startup.abort(new Error("Interviewer connection timed out")), this.timing.startupMs);
+    const activeSignal = AbortSignal.any([this.lifetime.signal, startup.signal, ...(signal ? [signal] : [])]);
+    const onAbort = () => { void this.close(false); };
+    activeSignal.addEventListener("abort", onAbort, { once: true });
     try {
-      this.assertActive(signal);
+      this.assertActive(activeSignal);
       this.ev.onStatus("connecting", "requesting microphone access");
       this.trace.mark("mic.request");
-      this.mic = await navigator.mediaDevices.getUserMedia({
+      const microphone = navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true },
+      }).then((stream) => {
+        if (this.closing || activeSignal.aborted) {
+          stream.getTracks().forEach((track) => track.stop());
+          throw activeSignal.reason ?? this.abortError();
+        }
+        this.mic = stream;
+        return stream;
       });
+      const mic = await bounded(microphone, this.timing.startupMs, activeSignal);
       this.trace.mark("mic.acquired");
-      this.assertActive(signal);
+      this.assertActive(activeSignal);
 
       this.ev.onStatus("connecting", "creating WebRTC offer");
       const pc = new RTCPeerConnection();
@@ -132,7 +131,11 @@ export class GptLiveTransport implements LiveTransport {
       };
       pc.onconnectionstatechange = () => {
         this.trace.mark("peer.connectionstate", pc.connectionState);
-        if (this.closing || !this.sessionStarted) return;
+        if (this.closing) return;
+        if (!this.sessionStarted) {
+          if (pc.connectionState === "failed" || pc.connectionState === "closed") startup.abort(new Error("Connection failed before the interview started"));
+          return;
+        }
         if (pc.connectionState === "disconnected") {
           this.disconnectTimer ??= setTimeout(() => {
             this.disconnectTimer = null;
@@ -149,7 +152,7 @@ export class GptLiveTransport implements LiveTransport {
         }
       };
 
-      pc.addTrack(this.mic.getTracks()[0]);
+      pc.addTrack(mic.getTracks()[0]);
 
       const dc = pc.createDataChannel("oai-events");
       this.dc = dc;
@@ -162,26 +165,29 @@ export class GptLiveTransport implements LiveTransport {
           this.resolveCloseWaiter();
         } else if (this.sessionStarted) {
           this.notifyEnded("connection lost");
-        }
+        } else startup.abort(new Error("Connection closed before the interview started"));
       };
 
-      const offer = await pc.createOffer();
+      const offer = await bounded(pc.createOffer(), this.timing.startupMs, activeSignal);
       this.trace.mark("sdp.offer.created");
-      await pc.setLocalDescription(offer);
+      this.assertActive(activeSignal);
+      await bounded(pc.setLocalDescription(offer), this.timing.startupMs, activeSignal);
       this.trace.mark("sdp.local_description_set");
-      await new Promise<void>((resolve) => {
+      await bounded(new Promise<void>((resolve) => {
         if (pc.iceGatheringState === "complete") return resolve();
-        const check = () => {
-          if (pc.iceGatheringState === "complete") {
-            pc.removeEventListener("icegatheringstatechange", check);
-            resolve();
-          }
+        const finish = () => {
+          clearTimeout(timer);
+          pc.removeEventListener("icegatheringstatechange", check);
+          this.cleanups.delete(finish);
+          resolve();
         };
+        const check = () => { if (pc.iceGatheringState === "complete") finish(); };
+        const timer = setTimeout(finish, 3000);
+        this.cleanups.add(finish);
         pc.addEventListener("icegatheringstatechange", check);
-        setTimeout(resolve, 3000); // don't hang on ICE trickle
-      });
+      }), 4000, activeSignal);
       this.trace.mark("ice.gathering_finished", pc.iceGatheringState);
-      this.assertActive(signal);
+      this.assertActive(activeSignal);
 
       this.ev.onStatus("connecting", "contacting interviewer");
       this.trace.mark("live_api.request");
@@ -189,7 +195,7 @@ export class GptLiveTransport implements LiveTransport {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: this.sessionDbId, sdp: pc.localDescription?.sdp }),
-        signal,
+        signal: activeSignal,
       });
       this.trace.mark("live_api.response", String(res.status));
       if (!res.ok) throw new Error(`live session create failed: ${res.status} ${await res.text()}`);
@@ -203,14 +209,20 @@ export class GptLiveTransport implements LiveTransport {
       }
       if (!data.sdp) throw new Error("no SDP answer from server");
       this.trace.mark("live_api.answer", data.liveSessionId);
-      this.assertActive(signal);
-      await pc.setRemoteDescription({ type: "answer", sdp: data.sdp });
+      this.assertActive(activeSignal);
+      await bounded(pc.setRemoteDescription({ type: "answer", sdp: data.sdp }), this.timing.startupMs, activeSignal);
       this.trace.mark("sdp.remote_description_set");
-      this.assertActive(signal);
+      this.assertActive(activeSignal);
+      if (!this.sessionStarted) await bounded(new Promise<void>((resolve) => { this.startWaiter = resolve; }), this.timing.startupMs, activeSignal);
+      this.assertActive(activeSignal);
     } catch (err) {
       this.trace.mark("connect.error", err instanceof Error ? err.message : String(err));
       await this.close(false);
       throw err;
+    } finally {
+      clearTimeout(timeout);
+      activeSignal.removeEventListener("abort", onAbort);
+      this.startWaiter = null;
     }
   }
 
@@ -226,6 +238,7 @@ export class GptLiveTransport implements LiveTransport {
   }
 
   private send(obj: Record<string, unknown>): boolean {
+    if (this.closing && obj.type !== "session.close") return false;
     const raw = JSON.stringify(obj);
     const dc = this.dc;
     if (dc?.readyState !== "open") {
@@ -264,15 +277,14 @@ export class GptLiveTransport implements LiveTransport {
 
   private handleMessage(raw: string): void {
     this.trace.incoming(raw);
-    let ev: LiveEvent;
-    try {
-      ev = JSON.parse(raw) as LiveEvent;
-    } catch {
-      return;
-    }
+    const ev = parseLiveEvent(raw);
+    if (!ev) return;
+    this.activity.observe(ev);
 
     switch (ev.type) {
       case "session.started":
+        if (this.closing || this.sessionStarted) return;
+        this.startWaiter?.();
         this.t0 = performance.now();
         this.sessionStarted = true;
         this.ev.onStarted(ev.session?.id ?? "");
@@ -294,12 +306,11 @@ export class GptLiveTransport implements LiveTransport {
         return;
       }
       case "session.delegation.created":
-        this.pendingCalls++;
-        this.ev.onStatus("thinking");
+        this.reportActivity();
         return;
       case "session.delegation.completed":
       case "response.completed":
-        this.delegationCompleted();
+        this.reportActivity();
         return;
       case "response.event":
         this.handleResponseEvent(ev);
@@ -317,64 +328,56 @@ export class GptLiveTransport implements LiveTransport {
     }
   }
 
-  private delegationCompleted(): void {
-    this.pendingCalls = Math.max(0, this.pendingCalls - 1);
-    if (this.pendingCalls === 0) this.ev.onStatus("live");
+  private reportActivity(): void {
+    if (!this.closing) this.ev.onStatus(this.activity.pending || this.activeTools.size > 0 ? "thinking" : "live");
   }
 
   private handleResponseEvent(ev: LiveEvent): void {
     const inner = ev.event;
-    if (inner?.type === "response.completed") {
-      this.delegationCompleted();
-      return;
-    }
-    if (inner?.type !== "response.output_item.done") return;
+    this.reportActivity();
+    if (this.closing || inner?.type !== "response.output_item.done") return;
     const item = inner.item;
-    if (item?.type !== "function_call" || !item.call_id || !item.name) return;
-
+    if (item?.type !== "function_call" || !item.call_id || !item.name || this.seenTools.has(item.call_id)) return;
     const callId = item.call_id;
+    const name = item.name;
+    this.seenTools.add(callId);
+    this.activeTools.add(callId);
+    this.reportActivity();
     let args: Record<string, unknown> = {};
     try {
-      args = item.arguments ? (JSON.parse(item.arguments) as Record<string, unknown>) : {};
-    } catch {
-      args = {};
-    }
-
+      const parsed = JSON.parse(item.arguments ?? "{}");
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) args = parsed;
+    } catch { /* invalid arguments are an empty object */ }
     void (async () => {
-      this.toolCallDepth++;
       const startedAt = performance.now();
-      this.trace.mark("tool.handler.start", `${item.name}:${callId}`, { callId, toolName: item.name });
+      const controller = new AbortController();
+      const signal = AbortSignal.any([controller.signal, this.lifetime.signal]);
+      this.trace.mark("tool.handler.start", `${name}:${callId}`, { callId, toolName: name });
+      let result: ToolResult;
       try {
-        const output = await this.ev.onToolCall(item.name!, args);
-        this.trace.mark("tool.handler.end", `${Math.round(performance.now() - startedAt)}ms`, {
-          callId,
-          toolName: item.name,
-        });
-        this.send({
-          type: "response.item.create",
-          event_id: eid("tool_result"),
-          item: { type: "function_call_output", call_id: callId, output },
-        });
-      } catch (err) {
-        this.trace.mark("tool.handler.error", err instanceof Error ? err.message : String(err), {
-          callId,
-          toolName: item.name,
-        });
-        this.send({
-          type: "response.item.create",
-          event_id: eid("tool_result"),
-          item: {
-            type: "function_call_output",
-            call_id: callId,
-            output: JSON.stringify({ error: String(err) }),
-          },
-        });
-      } finally {
-        this.toolCallDepth--;
-        this.flushQueuedBoardImages();
-        // Appending function results/images does not auto-continue; must create.
+        const value = await bounded(this.ev.onToolCall(name, args, signal), this.timing.toolMs, signal);
+        result = typeof value === "string" ? { output: value } : value;
+        this.trace.mark("tool.handler.end", `${Math.round(performance.now() - startedAt)}ms`, { callId, toolName: name });
+      } catch (error) {
+        controller.abort();
+        this.trace.mark("tool.handler.error", String(error), { callId, toolName: name });
+        result = { output: JSON.stringify({ error: String(error) }) };
+      }
+      this.activeTools.delete(callId);
+      if (this.closing) return;
+      this.toolResults.push({ callId, result });
+      if (this.activeTools.size === 0) {
+        for (const completed of this.toolResults.splice(0)) {
+          this.send({ type: "response.item.create", event_id: eid("tool_result"),
+            item: { type: "function_call_output", call_id: completed.callId, output: completed.result.output } });
+          if (completed.result.image && this.imagePushEnabled) {
+            this.sendBoardImage(completed.result.image.dataUrl, completed.result.image.note);
+          }
+        }
+        this.activity.expectResponse();
         this.send({ type: "response.create", event_id: eid("continue") });
       }
+      this.reportActivity();
     })();
   }
 
@@ -405,20 +408,6 @@ export class GptLiveTransport implements LiveTransport {
     });
   }
 
-  queueBoardImage(dataUrl: string, note: string): void {
-    if (this.toolCallDepth > 0) {
-      this.queuedBoardImages.push({ dataUrl, note });
-      this.trace.mark("board_image.queued", note, { imageBytes: dataUrl.length });
-      return;
-    }
-    this.sendBoardImage(dataUrl, note);
-  }
-
-  private flushQueuedBoardImages(): void {
-    const pending = this.queuedBoardImages.splice(0);
-    for (const image of pending) this.sendBoardImage(image.dataUrl, image.note);
-  }
-
   private sendBoardImage(dataUrl: string, note: string): void {
     const sent = this.send({
       type: "response.item.create",
@@ -445,37 +434,43 @@ export class GptLiveTransport implements LiveTransport {
     this.send({ type: "session.input_audio.unmute", event_id: eid("unmute") });
   }
 
-  async close(graceful = true): Promise<void> {
-    if (this.closing) return;
-    this.closing = true;
-    this.trace.mark("close.requested", graceful ? "graceful" : "immediate");
-    this.clearDisconnectTimer();
-    const closeSent = !this.sessionClosed && this.send({ type: "session.close", event_id: eid("close") });
-    if (graceful && closeSent && this.sessionStarted && !this.sessionClosed) {
-      const acknowledged = new Promise<void>((resolve) => {
-        this.closeWaiter = resolve;
-      });
-      const timedOut = await Promise.race([
-        acknowledged.then(() => false),
-        new Promise<true>((resolve) => setTimeout(() => resolve(true), 10_000)),
-      ]);
-      this.closeWaiter = null;
-      if (timedOut) {
-        this.trace.mark("close.ack_timeout");
-        console.warn("[live] timed out waiting for session.closed");
-      } else {
-        this.trace.mark("close.acknowledged");
-      }
+  close(graceful = true): Promise<void> {
+    if (!graceful) this.forceClose = true;
+    if (this.closePromise) {
+      if (!graceful) this.resolveCloseWaiter();
+      return this.closePromise;
     }
+    this.closing = true;
+    this.closePromise = Promise.resolve().then(() => this.shutdown(graceful));
+    return this.closePromise;
+  }
+
+  private async shutdown(graceful: boolean): Promise<void> {
+    this.trace.mark("close.requested", graceful ? "graceful" : "immediate");
+    this.lifetime.abort();
+    this.clearDisconnectTimer();
+    this.cleanups.forEach((cleanup) => cleanup());
+    this.mic?.getTracks().forEach((track) => track.stop());
+    this.mic = null;
+    // Install the waiter before sending; adapters can acknowledge synchronously.
+    const acknowledged = new Promise<void>((resolve) => { this.closeWaiter = resolve; });
+    const closeSent = !this.sessionClosed && this.dc?.readyState === "open" && this.send({ type: "session.close", event_id: eid("close") });
+    if (graceful && !this.forceClose && closeSent && this.sessionStarted && !this.sessionClosed) {
+      try {
+        await bounded(acknowledged, this.timing.closeMs);
+        this.trace.mark("close.acknowledged");
+      } catch { this.trace.mark("close.ack_timeout"); }
+    }
+    this.closeWaiter = null;
     const dc = this.dc;
     const pc = this.pc;
-    const mic = this.mic;
     const audioEl = this.audioEl;
     this.dc = null;
     this.pc = null;
     this.mic = null;
     this.audioEl = null;
     if (dc) {
+      dc.onopen = null;
       dc.onmessage = null;
       dc.onclose = null;
       dc.close();
@@ -485,8 +480,8 @@ export class GptLiveTransport implements LiveTransport {
       pc.onconnectionstatechange = null;
       pc.close();
     }
-    mic?.getTracks().forEach((t) => t.stop());
     if (audioEl) audioEl.srcObject = null;
+    this.toolResults = [];
     this.trace.mark("teardown.complete");
   }
 }

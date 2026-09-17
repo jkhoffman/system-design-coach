@@ -12,15 +12,23 @@ interface Ref<T> {
 
 export function useInterviewCheckpoint(input: {
   sessionId: string;
+  initialRevision: number;
   timeline: Ref<Timeline>;
   t0: Ref<number | null>;
   ended: Ref<boolean>;
   liveTrace: () => LiveTraceEvent[];
   active: boolean;
 }) {
-  const { sessionId, timeline, t0, ended, liveTrace, active } = input;
+  const { sessionId, initialRevision, timeline, t0, ended, liveTrace, active } = input;
   const persistInFlight = useRef(false);
-  const revision = useRef(0);
+  const revision = useRef(initialRevision);
+  const request = useRef<AbortController | null>(null);
+  const mounted = useRef(true);
+  const stopCheckpointing = useCallback(() => { request.current?.abort(); }, []);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; stopCheckpointing(); };
+  }, [stopCheckpointing]);
   const [checkpointError, setCheckpointError] = useState<string | null>(null);
 
   const progressPayload = useCallback(() => {
@@ -36,18 +44,21 @@ export function useInterviewCheckpoint(input: {
   const saveProgress = useCallback(async () => {
     if (t0.current == null || ended.current || persistInFlight.current) return;
     persistInFlight.current = true;
+    const controller = new AbortController();
+    request.current = controller;
     try {
       const response = await fetch(`/api/sessions/${sessionId}`, {
         method: "PATCH",
-        signal: AbortSignal.timeout(10_000),
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(progressPayload()),
       });
       if (!response.ok) throw new Error(`Checkpoint failed (${response.status}); retrying…`);
-      setCheckpointError(null);
+      if (mounted.current && !ended.current) setCheckpointError(null);
     } catch (error) {
-      if (!ended.current) setCheckpointError(error instanceof Error ? error.message : "Checkpoint failed; retrying…");
+      if (mounted.current && !ended.current && !controller.signal.aborted) setCheckpointError(error instanceof Error ? error.message : "Checkpoint failed; retrying…");
     } finally {
+      request.current = null;
       persistInFlight.current = false;
     }
   }, [sessionId, t0, ended, progressPayload]);
@@ -73,5 +84,5 @@ export function useInterviewCheckpoint(input: {
     const iv = setInterval(() => void saveProgress(), CHECKPOINT_MS);
     return () => clearInterval(iv);
   }, [active, saveProgress]);
-  return { checkpointError };
+  return { checkpointError, stopCheckpointing };
 }

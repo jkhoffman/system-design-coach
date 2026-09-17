@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import type { LiveTransport } from "@/lib/liveSession";
 import type { Timeline } from "@/lib/timeline";
 import { elementsVersionKey, summarizeScene, type ExcalidrawElementLike } from "@/lib/summarizeScene";
+import { bounded } from "@/lib/async";
 import { fmtMs } from "@/lib/rubric";
 
 const DRAWING_PAUSE_MS = 4000;
@@ -20,8 +21,8 @@ export function useBoardSync(input: {
   timeline: Ref<Timeline>;
   t0: Ref<number | null>;
   sessionMs: () => number;
-  currentElements: () => ExcalidrawElementLike[];
-  exportPngDataUrl: () => Promise<string | null>;
+  currentElements: () => readonly ExcalidrawElementLike[];
+  exportPngDataUrl: (signal?: AbortSignal) => Promise<string | null>;
 }) {
   const {
     sessionId,
@@ -32,6 +33,8 @@ export function useBoardSync(input: {
     currentElements,
     exportPngDataUrl,
   } = input;
+  const lifetime = useRef<AbortController | null>(null);
+  const finishing = useRef(false);
   const lastVersionKey = useRef("");
   const pauseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardDirty = useRef(false);
@@ -60,19 +63,22 @@ export function useBoardSync(input: {
       return;
     }
 
-    const png = await exportPngDataUrl().catch(() => null);
-    if (!png) return;
+    const signal = lifetime.current?.signal;
+    if (!signal || signal.aborted) return;
     lastSnapshotMs.current = t;
     snapshotCount.current++;
+    const png = await exportPngDataUrl(signal).catch(() => null);
+    if (!png || signal.aborted) return;
     const upload = (async () => {
       const res = await fetch(`/api/sessions/${sessionId}/snapshot`, {
         method: "POST",
+        signal: AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ startMs: t, label: "milestone", png }),
       });
       if (!res.ok) return;
       const d = (await res.json()) as { file?: string };
-      if (d.file) timeline.current.addSnapshot(t, "milestone", d.file);
+      if (!signal.aborted && d.file) timeline.current.addSnapshot(t, "milestone", d.file);
     })();
     trackTask(upload);
     await upload.catch(() => {});
@@ -89,6 +95,7 @@ export function useBoardSync(input: {
 
   const onWhiteboardChange = useCallback(
     (elements: readonly { id: string; version?: number; isDeleted?: boolean }[]) => {
+      if (finishing.current) return;
       const key = elementsVersionKey(elements as readonly ExcalidrawElementLike[]);
       if (key === lastVersionKey.current) return; // selection/scroll only
       lastVersionKey.current = key;
@@ -100,16 +107,22 @@ export function useBoardSync(input: {
   );
 
   const flushBoardUpdates = useCallback(async () => {
+    finishing.current = true;
     if (pauseTimer.current) {
       clearTimeout(pauseTimer.current);
       pauseTimer.current = null;
     }
     if (boardDirty.current) trackTask(pushBoardUpdate());
-    await Promise.allSettled([...pendingTasks.current]);
+    try { await bounded(Promise.allSettled([...pendingTasks.current]), 12_000); }
+    catch { /* A failed upload cannot prevent finalization. */ }
+    finally { lifetime.current?.abort(); }
   }, [pushBoardUpdate, trackTask]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    lifetime.current = controller;
     return () => {
+      controller.abort();
       if (pauseTimer.current) clearTimeout(pauseTimer.current);
     };
   }, []);
