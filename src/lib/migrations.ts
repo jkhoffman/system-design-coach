@@ -37,6 +37,9 @@ const migrations: ((db: DatabaseSync) => void)[] = [
     ALTER TABLE interview_sessions ADD COLUMN recording_attempt TEXT;
     ALTER TABLE interview_sessions ADD COLUMN recording_expires_at INTEGER;
   `),
+  (db) => db.exec(`CREATE TABLE generated_prompts (
+    id TEXT PRIMARY KEY, spec TEXT NOT NULL, created_at INTEGER NOT NULL
+  )`),
 ];
 
 export const SCHEMA_VERSION = migrations.length;

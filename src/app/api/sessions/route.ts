@@ -3,7 +3,7 @@ import { errorResponse, readJsonBody } from "@/lib/http";
 import { getLibraryPrompt } from "@/lib/prompts";
 import { CreateSessionSchema } from "@/lib/schemas";
 import { toClientSession } from "@/lib/sessionDto";
-import type { PromptSpec } from "@/lib/types";
+import { getGeneratedPrompt } from "@/lib/generatedPrompts";
 
 export async function GET() {
   return Response.json({ sessions: listSessionSummaries(50) });
@@ -13,16 +13,8 @@ export async function POST(request: Request) {
   try {
     const body = CreateSessionSchema.parse(await readJsonBody(request));
 
-    let prompt: PromptSpec | undefined;
-    if (body.mode === "library") {
-      prompt = body.promptId ? getLibraryPrompt(body.promptId) : undefined;
-      if (!prompt) return Response.json({ error: "unknown promptId" }, { status: 400 });
-    } else {
-      prompt = body.prompt;
-      if (!prompt) {
-        return Response.json({ error: "custom/freeform mode requires a prompt" }, { status: 400 });
-      }
-    }
+    const prompt = body.mode === "library" ? getLibraryPrompt(body.promptId) : getGeneratedPrompt(body.promptId);
+    if (!prompt) return Response.json({ error: "unknown promptId" }, { status: 400 });
 
     const session = createSession({
       mode: body.mode,

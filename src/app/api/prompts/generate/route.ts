@@ -1,3 +1,4 @@
+import { saveGeneratedPrompt } from "@/lib/generatedPrompts";
 import { errorResponse, readJsonBody } from "@/lib/http";
 import { generatePromptSpec } from "@/lib/promptGen";
 import { GenerateBriefingSchema } from "@/lib/schemas";
@@ -8,8 +9,8 @@ export async function POST(request: Request) {
   }
   try {
     const briefing = GenerateBriefingSchema.parse(await readJsonBody(request));
-    const prompt = await generatePromptSpec(briefing);
-    return Response.json({ prompt });
+    const prompt = await generatePromptSpec(briefing, request.signal);
+    return Response.json({ prompt: saveGeneratedPrompt(prompt) });
   } catch (error) {
     const res = errorResponse(error);
     if (res.status < 500) return res;

@@ -97,8 +97,8 @@ const SessionSetupSchema = z.object({
 });
 export const CreateSessionSchema = z.discriminatedUnion("mode", [
   SessionSetupSchema.extend({ mode: z.literal("library"), promptId: z.string().trim().min(1).max(80) }),
-  SessionSetupSchema.extend({ mode: z.literal("custom"), prompt: PromptSpecSchema }),
-  SessionSetupSchema.extend({ mode: z.literal("freeform"), prompt: PromptSpecSchema }),
+  SessionSetupSchema.extend({ mode: z.literal("custom"), promptId: z.string().regex(/^gen-[a-f0-9]{16}$/) }),
+  SessionSetupSchema.extend({ mode: z.literal("freeform"), promptId: z.string().regex(/^gen-[a-f0-9]{16}$/) }),
 ]);
 
 export const LiveSessionRequestSchema = z.object({

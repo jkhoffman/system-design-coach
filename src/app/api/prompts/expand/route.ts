@@ -1,3 +1,4 @@
+import { saveGeneratedPrompt } from "@/lib/generatedPrompts";
 import { errorResponse, readJsonBody } from "@/lib/http";
 import { expandPromptSpec } from "@/lib/promptGen";
 import { ExpandPromptSchema } from "@/lib/schemas";
@@ -9,8 +10,8 @@ export async function POST(request: Request) {
   try {
     const body = ExpandPromptSchema.parse(await readJsonBody(request));
     const { description, ...briefing } = body;
-    const prompt = await expandPromptSpec(description, briefing);
-    return Response.json({ prompt });
+    const prompt = await expandPromptSpec(description, briefing, request.signal);
+    return Response.json({ prompt: saveGeneratedPrompt(prompt) });
   } catch (error) {
     const res = errorResponse(error);
     if (res.status < 500) return res;

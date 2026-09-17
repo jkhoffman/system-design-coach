@@ -2,16 +2,18 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
-import { PROMPT_LIBRARY } from "@/lib/prompts";
-import type { Briefing, Mode, PromptSpec } from "@/lib/types";
+import type { PublicPrompt } from "@/lib/publicPrompt";
+import { PRESET_DURATIONS, durationSeconds, type DurationSelection } from "@/lib/duration";
+import { fetchJson } from "@/lib/clientApi";
+import { usePromptGeneration } from "./usePromptGeneration";
+import BriefingFields from "./BriefingFields";
+import Field from "./Field";
+import type { Briefing, Mode } from "@/lib/types";
 
-const LEVELS = ["L4", "L5", "L6", "Staff"];
-const DURATIONS = [20 * 60, 30 * 60, 45 * 60];
-
-export default function SetupForm() {
+export default function SetupForm({ prompts }: { prompts: PublicPrompt[] }) {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("library");
-  const [promptId, setPromptId] = useState(PROMPT_LIBRARY[0].id);
+  const [promptId, setPromptId] = useState(prompts[0].id);
   const [description, setDescription] = useState("");
   const [briefing, setBriefing] = useState<Briefing>({
     company: "",
@@ -19,99 +21,48 @@ export default function SetupForm() {
     level: "L5",
     jobDescription: "",
   });
-  const [durationSec, setDurationSec] = useState(45 * 60);
+  const [duration, setDuration] = useState<DurationSelection>({ kind: "preset", seconds: 45 * 60 });
   const [customMin, setCustomMin] = useState("60");
+  const durationSec = durationSeconds(duration);
+  const isCustom = duration.kind === "custom";
+  const customValid = durationSeconds({ kind: "custom", minutes: customMin }) !== null;
   const customMinutes = Number(customMin);
-  const customValid = Number.isInteger(customMinutes) && customMinutes >= 5 && customMinutes <= 120;
-  const isCustom = !DURATIONS.includes(durationSec);
-  const [generated, setGenerated] = useState<PromptSpec | null>(null);
-  const [busy, setBusy] = useState<"gen" | "start" | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const generate = async () => {
-    setBusy("gen");
-    setError(null);
-    try {
-      const res = await fetch(
-        mode === "freeform" ? "/api/prompts/expand" : "/api/prompts/generate",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(mode === "freeform" ? { ...briefing, description } : briefing),
-        },
-      );
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "generation failed");
-      setGenerated(data.prompt as PromptSpec);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
+  const generation = usePromptGeneration();
+  const { generated, generating, invalidate } = generation;
+  const [starting, setStarting] = useState(false);
+  const busy = starting ? "start" : generating ? "gen" : null;
+  const [startError, setError] = useState<string | null>(null);
+  const error = startError ?? generation.error;
+  const generate = () => { setError(null); return generation.generate(mode, briefing, description); };
 
   const start = async () => {
-    setBusy("start");
+    if (durationSec == null || (mode !== "library" && !generated)) return;
+    setStarting(true);
     setError(null);
     try {
-      const res = await fetch("/api/sessions", {
+      const data = await fetchJson<{ session: { id: string } }>("/api/sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode,
           briefing,
-          promptId: mode === "library" ? promptId : undefined,
-          prompt: mode === "library" ? undefined : generated,
+          promptId: mode === "library" ? promptId : generated?.id,
           durationSec,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? "failed to create session");
       router.push(`/interview/${data.session.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setBusy(null);
+      setStarting(false);
     }
   };
 
   const updateBriefing = (patch: Partial<Briefing>) => {
     setBriefing((current) => ({ ...current, ...patch }));
-    setGenerated(null);
+    invalidate();
   };
 
-  const canStart = (mode === "library" || generated !== null) && (!isCustom || customValid);
-
-  const briefingFields = (
-    <div className="grid gap-3 sm:grid-cols-3">
-      <Field label="Company">
-        <input
-          value={briefing.company}
-          onChange={(e) => updateBriefing({ company: e.target.value })}
-          placeholder="e.g. Stripe"
-          className="input"
-        />
-      </Field>
-      <Field label="Position">
-        <input
-          value={briefing.position}
-          onChange={(e) => updateBriefing({ position: e.target.value })}
-          placeholder="e.g. Backend engineer"
-          className="input"
-        />
-      </Field>
-      <Field label="Level">
-        <select
-          value={briefing.level}
-          onChange={(e) => updateBriefing({ level: e.target.value })}
-          className="input"
-        >
-          {LEVELS.map((l) => (
-            <option key={l}>{l}</option>
-          ))}
-        </select>
-      </Field>
-    </div>
-  );
+  const canStart = (mode === "library" || generated !== null) && durationSec !== null;
 
   const generateRow = (
     <div className="space-y-3">
@@ -151,7 +102,7 @@ export default function SetupForm() {
             key={m}
             onClick={() => {
               setMode(m);
-              setGenerated(null);
+              invalidate();
             }}
             className={`flex-1 rounded-md py-2 text-sm font-medium capitalize ${
               mode === m ? "bg-neutral-800 text-white" : "text-neutral-400 hover:text-neutral-200"
@@ -170,7 +121,7 @@ export default function SetupForm() {
         <div className="space-y-3">
           <label className="block text-sm text-neutral-400">Prompt</label>
           <div className="grid gap-2 sm:grid-cols-2">
-            {PROMPT_LIBRARY.map((p) => (
+            {prompts.map((p) => (
               <button
                 key={p.id}
                 onClick={() => setPromptId(p.id)}
@@ -185,39 +136,11 @@ export default function SetupForm() {
               </button>
             ))}
           </div>
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="Company (flavor)">
-              <input
-                value={briefing.company}
-                onChange={(e) => updateBriefing({ company: e.target.value })}
-                placeholder="e.g. Google"
-                className="input"
-              />
-            </Field>
-            <Field label="Position">
-              <input
-                value={briefing.position}
-                onChange={(e) => updateBriefing({ position: e.target.value })}
-                placeholder="e.g. Backend SWE"
-                className="input"
-              />
-            </Field>
-            <Field label="Level">
-              <select
-                value={briefing.level}
-                onChange={(e) => updateBriefing({ level: e.target.value })}
-                className="input"
-              >
-                {LEVELS.map((l) => (
-                  <option key={l}>{l}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
+          <BriefingFields briefing={briefing} update={updateBriefing} flavor />
         </div>
       ) : mode === "custom" ? (
         <div className="space-y-3">
-          {briefingFields}
+          <BriefingFields briefing={briefing} update={updateBriefing} />
           <Field label="Job description (optional — paste for sharper prompts)">
             <textarea
               value={briefing.jobDescription}
@@ -236,7 +159,7 @@ export default function SetupForm() {
               value={description}
               onChange={(e) => {
                 setDescription(e.target.value);
-                setGenerated(null);
+                invalidate();
               }}
               rows={5}
               placeholder={
@@ -245,19 +168,19 @@ export default function SetupForm() {
               className="input"
             />
           </Field>
-          {briefingFields}
+          <BriefingFields briefing={briefing} update={updateBriefing} />
           {generateRow}
         </div>
       )}
 
       <Field label="Interview length">
         <div className="flex flex-wrap items-center gap-2">
-          {DURATIONS.map((d) => (
+          {PRESET_DURATIONS.map((d) => (
             <button
               key={d}
-              onClick={() => setDurationSec(d)}
+              onClick={() => setDuration({ kind: "preset", seconds: d })}
               className={`rounded-lg border px-4 py-2 text-sm ${
-                durationSec === d
+                !isCustom && durationSec === d
                   ? "border-emerald-600 bg-emerald-950/40"
                   : "border-neutral-800 hover:border-neutral-700"
               }`}
@@ -279,12 +202,9 @@ export default function SetupForm() {
               value={customMin}
               onChange={(e) => {
                 setCustomMin(e.target.value);
-                const m = Number(e.target.value);
-                if (Number.isInteger(m) && m >= 5 && m <= 120) setDurationSec(m * 60);
+                setDuration({ kind: "custom", minutes: e.target.value });
               }}
-              onFocus={() => {
-                if (customValid) setDurationSec(customMinutes * 60);
-              }}
+              onFocus={() => setDuration({ kind: "custom", minutes: customMin })}
               className="w-16 bg-transparent outline-none"
             />
             <span className="text-neutral-400">min custom</span>
@@ -310,14 +230,5 @@ export default function SetupForm() {
       </button>
       {error && <p className="text-sm text-red-400">{error}</p>}
     </div>
-  );
-}
-
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block space-y-1.5">
-      <span className="text-sm text-neutral-400">{label}</span>
-      {children}
-    </label>
   );
 }

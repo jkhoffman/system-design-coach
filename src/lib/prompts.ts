@@ -1,3 +1,4 @@
+import "server-only";
 import type { PromptSpec } from "./types";
 
 export const PROMPT_LIBRARY: PromptSpec[] = [

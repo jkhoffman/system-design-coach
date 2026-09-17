@@ -1,4 +1,6 @@
 import Link from "next/link";
+import { PROMPT_LIBRARY } from "@/lib/prompts";
+import { toPublicPrompt } from "@/lib/publicPrompt";
 import SetupForm from "@/components/SetupForm";
 
 export default function Home() {
@@ -18,7 +20,7 @@ export default function Home() {
           Past sessions
         </Link>
       </div>
-      <SetupForm />
+      <SetupForm prompts={PROMPT_LIBRARY.map(toPublicPrompt)} />
     </main>
   );
 }

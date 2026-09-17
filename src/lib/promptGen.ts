@@ -28,20 +28,20 @@ Rules:
 - If a level is provided, match the difficulty: entry-level prompts are forgiving and well-trodden; senior/staff prompts should have real ambiguity or scale pressure.
 - Do not name internal company systems that aren't public knowledge; keep it plausible, not proprietary.`;
 
-async function runSpecGeneration(instructions: string, input: string): Promise<PromptSpec> {
+async function runSpecGeneration(instructions: string, input: string, signal?: AbortSignal): Promise<PromptSpec> {
   const client = createOpenAIClient();
   const res = await client.responses.create({
     model: process.env.PROMPT_GEN_MODEL ?? "gpt-5.6-terra",
     instructions,
     input,
     text: { format: PROMPT_FORMAT },
-  });
+  }, { signal: AbortSignal.any([AbortSignal.timeout(60_000), ...(signal ? [signal] : [])]), timeout: 60_000, maxRetries: 0 });
 
   const parsed = PromptSpecSchema.omit({ id: true }).parse(JSON.parse(res.output_text));
   return { id: `gen-${newId()}`, ...parsed };
 }
 
-export async function generatePromptSpec(briefing: Briefing): Promise<PromptSpec> {
+export async function generatePromptSpec(briefing: Briefing, signal?: AbortSignal): Promise<PromptSpec> {
   const jd = briefing.jobDescription?.trim();
   const input = [
     `Company: ${briefing.company}`,
@@ -53,12 +53,13 @@ export async function generatePromptSpec(briefing: Briefing): Promise<PromptSpec
     .filter(Boolean)
     .join("\n\n");
 
-  return runSpecGeneration(GEN_INSTRUCTIONS, input);
+  return runSpecGeneration(GEN_INSTRUCTIONS, input, signal);
 }
 
 export async function expandPromptSpec(
   description: string,
   briefing: Briefing,
+  signal?: AbortSignal,
 ): Promise<PromptSpec> {
   const input = [
     briefing.company.trim() ? `Company (flavor only): ${briefing.company}` : null,
@@ -70,5 +71,5 @@ export async function expandPromptSpec(
     .filter(Boolean)
     .join("\n\n");
 
-  return runSpecGeneration(EXPAND_INSTRUCTIONS, input);
+  return runSpecGeneration(EXPAND_INSTRUCTIONS, input, signal);
 }

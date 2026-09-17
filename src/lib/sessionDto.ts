@@ -1,3 +1,4 @@
+import { toPublicPrompt } from "./publicPrompt";
 import type { ClientSession, SessionRow } from "./types";
 
 /** Fields that are safe and useful for browser callers; hides secrets, paths, and hidden prompt data. */
@@ -11,13 +12,7 @@ export function toClientSession(session: SessionRow): ClientSession {
       position: session.briefing.position,
       level: session.briefing.level,
     },
-    prompt: {
-      id: session.prompt.id,
-      title: session.prompt.title,
-      question: session.prompt.question,
-      context: session.prompt.context,
-      deepDiveAngles: session.prompt.deepDiveAngles,
-    },
+    prompt: toPublicPrompt(session.prompt),
     durationSec: session.durationSec,
     status: session.status,
     createdAt: session.createdAt,

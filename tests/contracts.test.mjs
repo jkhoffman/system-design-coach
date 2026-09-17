@@ -21,14 +21,7 @@ test("contracts", () => {
   const freeformBody = CreateSessionSchema.parse({
     mode: "freeform",
     briefing: { level: "L5" },
-    prompt: {
-      id: "x",
-      title: "t",
-      question: "q",
-      context: "",
-      factSheet: [{ q: "q", a: "a" }],
-      deepDiveAngles: ["a"],
-    },
+    promptId: "gen-1234567890abcdef",
     durationSec: 1200,
   });
   assert.equal(freeformBody.mode, "freeform");

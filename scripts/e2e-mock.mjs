@@ -77,7 +77,8 @@ async function runFreeformPromptFlow(baseUrl, mock) {
   });
   const expandBody = await expandResponse.json().catch(() => ({}));
   assert.equal(expandResponse.status, 200, `prompt expand failed: ${JSON.stringify(expandBody)}`);
-  assert.ok(expandBody.prompt?.factSheet?.length, "expanded prompt has no fact sheet");
+  assert.ok(expandBody.prompt?.id, "expanded prompt has no saved ID");
+  assert.equal(expandBody.prompt.factSheet, undefined, "public prompt exposed hidden fact sheet");
 
   const response = await fetch(`${baseUrl}/api/sessions`, {
     method: "POST",
@@ -85,7 +86,7 @@ async function runFreeformPromptFlow(baseUrl, mock) {
     body: JSON.stringify({
       mode: "freeform",
       briefing: { company: "", position: "", level: "L5" },
-      prompt: expandBody.prompt,
+      promptId: expandBody.prompt.id,
       durationSec: 300,
     }),
   });

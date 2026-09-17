@@ -50,7 +50,7 @@ export interface ClientSession {
   checkpointRevision: number;
   mode: Mode;
   briefing: Omit<Briefing, "jobDescription">;
-  prompt: Omit<PromptSpec, "factSheet">;
+  prompt: Pick<PromptSpec, "id" | "title" | "question">;
   durationSec: number;
   status: SessionStatus;
   createdAt: number;
