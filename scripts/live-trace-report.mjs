@@ -23,13 +23,18 @@ if (target.endsWith(".json") || fs.existsSync(target)) {
   const parsed = JSON.parse(fs.readFileSync(path.resolve(target), "utf8"));
   events = Array.isArray(parsed) ? parsed : parsed.liveTrace;
 } else {
-  const { getSession } = await import("../src/lib/db.ts");
-  session = getSession(target);
+  const { getSessionDiagnostics } = await import("../src/lib/sessionQueries.ts");
+  const { getSessionJobStatus } = await import("../src/lib/sessionJobs.ts");
+  const diagnostics = getSessionDiagnostics(target);
+  const jobs = getSessionJobStatus(target);
+  session = diagnostics ? { ...diagnostics.session, gradeStatus: jobs?.grade.status, recordingStatus: jobs?.recording.status } : null;
   if (!session) {
     console.error(`session not found: ${target}`);
     process.exit(1);
   }
-  events = session.liveTrace;
+  events = diagnostics.trace;
+  const { closeDb } = await import("../src/lib/database.ts");
+  closeDb();
 }
 
 if (!Array.isArray(events)) {
@@ -37,13 +42,14 @@ if (!Array.isArray(events)) {
   process.exit(1);
 }
 
-const report = analyzeLiveTrace(events);
+const { sanitizeTrace } = await import("../src/lib/traceContracts.ts");
+const report = analyzeLiveTrace(sanitizeTrace(events) ?? []);
 
 if (session) {
   console.log(`session: ${session.id}`);
   console.log(`status: ${session.status}  grade: ${session.gradeStatus}  recording: ${session.recordingStatus}`);
   console.log(`live session: ${session.liveSessionId ?? "none"}`);
-  console.log(`transcript turns: ${session.transcript.length}  timeline events: ${session.timeline.length}`);
+  console.log(`transcript turns: ${session.transcriptTurns}  timeline events: ${session.timelineEvents}`);
 }
 console.log(`trace events: ${report.eventCount} (${report.counts.in} in / ${report.counts.out} out / ${report.counts.local} local)`);
 console.log(`trace duration: ${formatMs(report.durationMs)}`);

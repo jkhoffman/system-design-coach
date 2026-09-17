@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { PublicPrompt } from "@/lib/publicPrompt";
 import { PRESET_DURATIONS, durationSeconds, type DurationSelection } from "@/lib/duration";
@@ -29,6 +29,8 @@ export default function SetupForm({ prompts }: { prompts: PublicPrompt[] }) {
   const customMinutes = Number(customMin);
   const generation = usePromptGeneration();
   const { generated, generating, invalidate } = generation;
+  const startRequest = useRef<AbortController | null>(null);
+  useEffect(() => () => startRequest.current?.abort(), []);
   const [starting, setStarting] = useState(false);
   const busy = starting ? "start" : generating ? "gen" : null;
   const [startError, setError] = useState<string | null>(null);
@@ -36,12 +38,15 @@ export default function SetupForm({ prompts }: { prompts: PublicPrompt[] }) {
   const generate = () => { setError(null); return generation.generate(mode, briefing, description); };
 
   const start = async () => {
-    if (durationSec == null || (mode !== "library" && !generated)) return;
+    if (startRequest.current || durationSec == null || (mode !== "library" && !generated)) return;
+    const controller = new AbortController();
+    startRequest.current = controller;
     setStarting(true);
     setError(null);
     try {
       const data = await fetchJson<{ session: { id: string } }>("/api/sessions", {
         method: "POST",
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           mode,
@@ -50,8 +55,11 @@ export default function SetupForm({ prompts }: { prompts: PublicPrompt[] }) {
           durationSec,
         }),
       });
+      if (controller.signal.aborted) return;
       router.push(`/interview/${data.session.id}`);
     } catch (e) {
+      startRequest.current = null;
+      if (controller.signal.aborted) return;
       setError(e instanceof Error ? e.message : String(e));
       setStarting(false);
     }

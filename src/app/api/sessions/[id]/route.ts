@@ -1,3 +1,4 @@
+import { findSession } from "@/lib/sessionLookup";
 import { saveFinalImage, discardFinalImage } from "@/lib/artifacts";
 import { getReviewSession } from "@/lib/sessionQueries";
 import { errorResponse, readJsonBody } from "@/lib/http";
@@ -6,10 +7,9 @@ import { finishSession, saveSessionProgress, getSessionAcknowledgment } from "@/
 
 export async function GET(_request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  if (!validSessionId(id)) return Response.json({ error: "not found" }, { status: 404 });
-  const session = getReviewSession(id);
+  const session = findSession(id, getReviewSession);
   if (!session) return Response.json({ error: "not found" }, { status: 404 });
-  return Response.json({ session: session });
+  return Response.json({ session });
 }
 
 export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {

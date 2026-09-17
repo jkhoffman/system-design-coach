@@ -1,6 +1,6 @@
 import { createOpenAIClient } from "./openai";
 import type { Briefing, PromptSpec } from "./types";
-import { newId } from "./db";
+import { newId } from "./ids";
 import { PromptSpecSchema } from "./schemas";
 import { PROMPT_FORMAT } from "./modelFormats";
 

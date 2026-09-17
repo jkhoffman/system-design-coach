@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import type { ClientSession } from "@/lib/types";
 import { useSessionJob } from "./useSessionJob";
-import { fmtMs } from "@/lib/rubric";
+import { fmtMs } from "@/lib/time";
 
 /**
  * Audio replay + synchronized view of the interview: WAV recording (candidate

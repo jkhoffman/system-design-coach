@@ -1,5 +1,5 @@
 import "server-only";
-import crypto from "node:crypto";
+import { newId } from "./ids";
 import { sanitizeTrace } from "./traceContracts";
 import { normalizeLegacyGrade } from "./legacyContracts";
 import { getDb } from "./database";
@@ -11,16 +11,11 @@ import type {
   Mode,
   TranscriptTurn,
   TimelineEvent,
-  GradeReport,
   GradeStatus,
   RecordingStatus,
   SessionSummary,
 } from "./types";
 
-
-export function newId(): string {
-  return crypto.randomBytes(8).toString("hex");
-}
 
 interface RawRow {
   id: string;
@@ -136,52 +131,4 @@ export function listSessionSummaries(limit = 50): SessionSummary[] {
     createdAt: r.created_at,
     score: typeof r.score === "number" ? r.score : undefined,
   }));
-}
-
-export function updateSession(
-  id: string,
-  patch: Partial<{
-    status: SessionRow["status"];
-    startedAt: number;
-    endedAt: number;
-    liveSessionId: string;
-    recordingPath: string | null;
-    recordingStatus: RecordingStatus;
-    recordingError: string | null;
-    transcript: TranscriptTurn[];
-    timeline: TimelineEvent[];
-    liveTrace: SessionRow["liveTrace"];
-    finalScene: unknown;
-    finalImage: string | null;
-    grade: GradeReport;
-    gradeStatus: GradeStatus;
-    gradeError: string | null;
-  }>
-): void {
-  const sets: string[] = [];
-  const vals: (string | number | null)[] = [];
-  const add = (col: string, v: string | number | null) => {
-    sets.push(`${col} = ?`);
-    vals.push(v);
-  };
-  if (patch.status !== undefined) add("status", patch.status);
-  if (patch.startedAt !== undefined) add("started_at", patch.startedAt);
-  if (patch.endedAt !== undefined) add("ended_at", patch.endedAt);
-  if (patch.liveSessionId !== undefined) add("live_session_id", patch.liveSessionId);
-  if (patch.recordingPath !== undefined) add("recording_path", patch.recordingPath);
-  if (patch.recordingStatus !== undefined) add("recording_status", patch.recordingStatus);
-  if (patch.recordingError !== undefined) add("recording_error", patch.recordingError);
-  if (patch.transcript !== undefined) add("transcript", JSON.stringify(patch.transcript));
-  if (patch.timeline !== undefined) add("timeline", JSON.stringify(patch.timeline));
-  if (patch.liveTrace !== undefined) add("live_trace", JSON.stringify(patch.liveTrace));
-  if (patch.finalScene !== undefined) add("final_scene", JSON.stringify(patch.finalScene));
-  if (patch.finalImage !== undefined) add("final_image", patch.finalImage);
-  if (patch.grade !== undefined) add("grade", JSON.stringify(patch.grade));
-  if (patch.gradeStatus !== undefined) add("grading_status", patch.gradeStatus);
-  if (patch.gradeError !== undefined) add("grade_error", patch.gradeError);
-  if (!sets.length) return;
-  vals.push(id);
-  getDb()
-    .prepare(`UPDATE interview_sessions SET ${sets.join(", ")} WHERE id = ?`)
-    .run(...vals);
 }

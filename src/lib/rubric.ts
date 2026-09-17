@@ -1,3 +1,4 @@
+import { fmtMs } from "./time";
 import { GradeReportSchema } from "./schemas";
 import type { Briefing, GradeReport, PromptSpec, TimelineEvent, TranscriptTurn } from "./types";
 
@@ -158,11 +159,6 @@ OUTPUT RULES:
 - drills: 2-4 concrete practice recommendations.`;
 }
 
-export function fmtMs(ms: number): string {
-  const s = Math.max(0, Math.round(ms / 1000));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
 export function validateGradeReport(input: unknown): GradeReport {
   const grade = GradeReportSchema.parse(input);
   const expected = new Map(RUBRIC.map((d) => [d.key, d]));
@@ -204,4 +200,3 @@ export function validateGradeReport(input: unknown): GradeReport {
     },
   };
 }
-

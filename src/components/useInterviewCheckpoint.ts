@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchJson } from "@/lib/clientApi";
 import type { LiveTraceEvent } from "@/lib/liveTrace";
 import type { Timeline } from "@/lib/timeline";
 
@@ -47,13 +48,12 @@ export function useInterviewCheckpoint(input: {
     const controller = new AbortController();
     request.current = controller;
     try {
-      const response = await fetch(`/api/sessions/${sessionId}`, {
+      await fetchJson(`/api/sessions/${sessionId}`, {
         method: "PATCH",
         signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(progressPayload()),
       });
-      if (!response.ok) throw new Error(`Checkpoint failed (${response.status}); retrying…`);
       if (mounted.current && !ended.current) setCheckpointError(null);
     } catch (error) {
       if (mounted.current && !ended.current && !controller.signal.aborted) setCheckpointError(error instanceof Error ? error.message : "Checkpoint failed; retrying…");

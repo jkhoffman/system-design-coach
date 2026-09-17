@@ -2,6 +2,27 @@
 
 Preserve the existing interview experience, prompt content, model settings, review URLs, and saved sessions. Make the changes below as separate, reviewable commits. Keep each commit green; add the regression tests for a behavior in the same commit as its fix.
 
+**Implementation completed — September 17, 2026**
+
+All eight phases are implemented on `codex/refactor-interview-lifecycle`. The
+test harness, atomic lifecycle commands, job ownership, interview controller,
+canonical contracts, server-owned prompts, media/query separation, and final
+utilities/documentation each have a separate commit.
+
+Final verification: ESLint and Next route type generation/TypeScript pass; all
+48 deterministic tests pass; the Webpack production build and expanded mocked
+browser suite pass. Browser coverage retains completed-interview, checkpoint
+recovery, and freeform flows, and adds failed upload/save recovery, expired jobs
+in concurrent review tabs, stale generation, briefing generation, duration
+boundaries, and hidden-data checks. The final browser run made four live-session
+creates, four grading calls, and four recording downloads against the local
+mock. Paid live smoke tests were not run.
+
+Compatibility coverage includes the original unversioned SQLite schemas, stored
+transcripts/grades/media references, legacy inline final images, and legacy trace
+IDs. The successful Webpack/browser runs resolve the earlier Turbopack baseline
+block described at the end of this document.
+
 The order prioritizes data preservation and resource ownership, then simplifies contracts and presentation. Keep the existing pure pacing, timeline, and scene-summary modules as the basis for the refactored application.
 
 1. **Establish the test harness and baseline.**

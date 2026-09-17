@@ -1,7 +1,7 @@
+import { findSession } from "@/lib/sessionLookup";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getReviewSession } from "@/lib/sessionQueries";
-import { validSessionId } from "@/lib/schemas";
 import ReviewReport from "@/components/ReviewReport";
 import ReplayScrubber from "@/components/ReplayScrubber";
 import GradeGate from "@/components/GradeGate";
@@ -10,8 +10,7 @@ export const dynamic = "force-dynamic";
 
 export default async function ReviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  if (!validSessionId(id)) notFound();
-  const session = getReviewSession(id);
+  const session = findSession(id, getReviewSession);
   if (!session) notFound();
   const clientSession = session;
 

@@ -77,7 +77,7 @@ export function useInterviewController(session: ClientSession) {
     finalPayload.current = structuredClone({
       kind: "finish", endedAt: Date.now(), transcript: timeline.current.getTranscript(),
       timeline: timeline.current.getEvents(), liveTrace: transport.current?.traceSnapshot() ?? [],
-      finalScene: board.currentElements(), finalImage,
+      finalScene: [...board.currentElements()], finalImage,
     });
     await saveAndFinish();
   }, [stopCheckpointing, sessionMs, flushBoardUpdates, board, saveAndFinish]);

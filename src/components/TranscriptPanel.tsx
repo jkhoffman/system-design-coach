@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import type { TimelineEvent } from "@/lib/types";
-import { fmtMs } from "@/lib/rubric";
+import { fmtMs } from "@/lib/time";
 
 export default function TranscriptPanel({ events }: { events: TimelineEvent[] }) {
   const scrollRef = useRef<HTMLDivElement>(null);

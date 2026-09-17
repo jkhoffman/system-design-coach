@@ -3,6 +3,7 @@ import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { installLiveBrowserStub } from "./live-browser-stub.mjs";
@@ -329,6 +330,127 @@ async function runCheckpointRecovery(context, baseUrl, mock, pageErrors) {
   await page.close();
 }
 
+async function runSaveRetry(context, baseUrl, pageErrors) {
+  const session = await createSession(baseUrl);
+  const page = await context.newPage();
+  page.on("pageerror", (error) => pageErrors.push(`save retry: ${error}`));
+  const payloads = [];
+  let failedUploads = 0;
+  await page.route(`**/api/sessions/${session.id}/snapshot`, async (route) => {
+    if (route.request().method() !== "POST") return route.continue();
+    failedUploads++;
+    await route.fulfill({ status: 503, json: { error: "mock upload failure" } });
+  });
+  await page.route(`**/api/sessions/${session.id}`, async (route) => {
+    if (route.request().method() !== "PATCH" || route.request().postDataJSON()?.kind !== "finish") return route.continue();
+    payloads.push(route.request().postData());
+    if (payloads.length <= 4) return route.fulfill({ status: 503, json: { error: "mock save failure" } });
+    return route.continue();
+  });
+  await joinMockInterview(page, baseUrl, session.id);
+  await drawClientBox(page);
+  await waitFor(() => failedUploads > 0, "failed board upload", 20_000);
+  await page.getByRole("button", { name: "End interview" }).click();
+  await page.getByRole("button", { name: "Retry save" }).waitFor({ timeout: 30_000 });
+  assert.equal(payloads.length, 4);
+  const stopped = await page.evaluate(() => window.__liveStub.micTracksStopped);
+  assert.equal(stopped, 1, "microphone stayed active after failed save");
+  await page.getByRole("button", { name: "Retry save" }).click();
+  await page.waitForURL("**/review", { timeout: 30_000 });
+  assert.equal(payloads.length, 5);
+  assert.equal(new Set(payloads).size, 1, "final retry payload changed");
+  const finished = await waitForSession(baseUrl, session.id,
+    (row) => row.gradeStatus === "done" && row.recordingStatus === "done", "review after failed save");
+  assert.ok(finished.finalImageUrl, "upload failure lost the final board");
+  assert.ok(finished.transcript.length > 0);
+  await page.close();
+}
+
+async function runExpiredJobs(context, baseUrl, dataDir, mock, pageErrors) {
+  const session = await createSession(baseUrl);
+  const connection = await fetch(`${baseUrl}/api/live/session`, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId: session.id, sdp: "mock-expired-jobs-offer" }) });
+  assert.equal(connection.status, 200);
+  const finish = await fetch(`${baseUrl}/api/sessions/${session.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "finish", endedAt: Date.now(), transcript: [], timeline: [] }) });
+  assert.equal(finish.status, 200);
+  const database = new DatabaseSync(path.join(dataDir, "app.db"));
+  try {
+    database.exec("PRAGMA busy_timeout = 5000");
+    database.prepare(`UPDATE interview_sessions SET grading_status = 'running', grading_attempt = 'expired-grade', grading_expires_at = 1,
+      recording_status = 'running', recording_attempt = 'expired-recording', recording_expires_at = 1 WHERE id = ?`).run(session.id);
+  } finally { database.close(); }
+  const before = { ...mock.counts };
+  const pages = await Promise.all([context.newPage(), context.newPage()]);
+  for (const page of pages) page.on("pageerror", (error) => pageErrors.push(`expired jobs: ${error}`));
+  await Promise.all(pages.map((page) => page.goto(`${baseUrl}/interview/${session.id}/review`)));
+  await waitForSession(baseUrl, session.id, (row) => row.gradeStatus === "done" && row.recordingStatus === "done", "expired jobs recovered");
+  for (const page of pages) await page.getByRole("heading", { name: "Scorecard" }).waitFor({ timeout: 15_000 });
+  assert.equal(mock.counts.gradeResponses - before.gradeResponses, 1, "concurrent tabs duplicated grading");
+  assert.equal(mock.counts.recordingGet - before.recordingGet, 1, "concurrent tabs duplicated recording download");
+  await Promise.all(pages.map((page) => page.close()));
+}
+
+async function runSetupRevision(context, baseUrl, pageErrors) {
+  const page = await context.newPage();
+  page.on("pageerror", (error) => pageErrors.push(`setup revision: ${error}`));
+  // Deliberately ignore cancellation so revision ownership, not fetch behavior, must discard the response.
+  await page.addInitScript(() => {
+    const nativeFetch = window.fetch;
+    window.fetch = (url, init) => nativeFetch(url, String(url).includes("/api/prompts/") ? { ...init, signal: undefined } : init);
+  });
+  let release;
+  let entered;
+  const delayed = new Promise((resolve) => { release = resolve; });
+  const started = new Promise((resolve) => { entered = resolve; });
+  await page.route("**/api/prompts/expand", async (route) => {
+    entered(); await delayed;
+    await route.fulfill({ json: { prompt: { id: "gen-0000000000000000", title: "Outdated generated prompt", question: "old question" } } });
+  });
+  await page.goto(baseUrl);
+  await page.getByRole("button", { name: "Describe your own" }).click();
+  await page.getByLabel("Describe the interview you want").fill("Design the first service");
+  await page.getByRole("button", { name: "Generate prompt", exact: true }).click();
+  await started;
+  await page.getByLabel("Describe the interview you want").fill("Design a different service");
+  const received = page.waitForResponse("**/api/prompts/expand");
+  release(); await received;
+  await page.waitForTimeout(100);
+  assert.equal(await page.getByText("Outdated generated prompt").count(), 0);
+  assert.equal(await page.getByRole("button", { name: "Start interview" }).isDisabled(), true);
+  await page.getByRole("button", { name: "Prompt library" }).click();
+  await page.getByRole("spinbutton").fill("");
+  assert.equal(await page.getByRole("button", { name: "Start interview" }).isDisabled(), true);
+  await page.getByRole("spinbutton").fill("20");
+  assert.equal(await page.getByRole("button", { name: "Start interview" }).isEnabled(), true);
+  await page.getByRole("spinbutton").fill("121");
+  assert.equal(await page.getByRole("button", { name: "Start interview" }).isDisabled(), true);
+  await page.getByRole("button", { name: "30 min", exact: true }).click();
+  assert.equal(await page.getByRole("button", { name: "Start interview" }).isEnabled(), true);
+  await page.getByRole("button", { name: "Custom (job briefing)", exact: true }).click();
+  await page.getByLabel("Company", { exact: true }).fill("Example");
+  await page.getByLabel("Position", { exact: true }).fill("Backend SWE");
+  const previewResponse = page.waitForResponse("**/api/prompts/generate");
+  await page.getByRole("button", { name: "Generate prompt", exact: true }).click();
+  const preview = await (await previewResponse).json();
+  assert.deepEqual(Object.keys(preview.prompt).sort(), ["id", "question", "title"]);
+  await page.getByRole("button", { name: "Start interview" }).click();
+  await page.waitForURL(/\/interview\/[a-f0-9]{16}$/, { timeout: 15_000 });
+  const id = page.url().split("/").pop();
+  assert.equal((await getSession(baseUrl, id)).mode, "custom");
+  await page.close();
+}
+
+async function assertPublicPromptBoundary(baseUrl) {
+  const secret = "About 100M monthly active users";
+  const html = await (await fetch(baseUrl)).text();
+  assert.equal(html.includes(secret), false, "server props exposed the prompt fact sheet");
+  const chunks = path.join(ROOT, ".next", "static", "chunks");
+  for (const file of fs.readdirSync(chunks, { recursive: true }).filter((file) => String(file).endsWith(".js"))) {
+    assert.equal(fs.readFileSync(path.join(chunks, String(file)), "utf8").includes(secret), false, `client bundle exposed hidden prompt in ${file}`);
+  }
+}
+
 async function main() {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "interview-e2e-data-"));
   const mock = await startMockOpenAI();
@@ -383,6 +505,10 @@ async function main() {
     await runHappyPath(context, appUrl, mock, pageErrors);
     await runCheckpointRecovery(context, appUrl, mock, pageErrors);
     await runFreeformPromptFlow(appUrl, mock);
+    await runSaveRetry(context, appUrl, pageErrors);
+    await runExpiredJobs(context, appUrl, dataDir, mock, pageErrors);
+    await runSetupRevision(context, appUrl, pageErrors);
+    await assertPublicPromptBoundary(appUrl);
     assert.deepEqual(pageErrors, [], `browser page errors:\n${pageErrors.join("\n")}`);
 
     console.log("mock E2E passed");

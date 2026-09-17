@@ -1,5 +1,6 @@
 import { LiveTrace, type LiveTraceEvent } from "./liveTrace";
 import { bounded } from "./async";
+import { parseJsonResponse } from "./clientApi";
 import { LiveActivity, parseLiveEvent, type LiveEvent } from "./liveProtocol";
 
 /**
@@ -8,7 +9,7 @@ import { LiveActivity, parseLiveEvent, type LiveEvent } from "./liveProtocol";
  * swapped in as an adapter without touching the interview room.
  */
 
-export type Speaker = "candidate" | "interviewer";
+import type { Speaker } from "./types";
 
 export interface ToolResult { output: string; image?: { dataUrl: string; note: string } }
 
@@ -198,12 +199,11 @@ export class GptLiveTransport implements LiveTransport {
         signal: activeSignal,
       });
       this.trace.mark("live_api.response", String(res.status));
-      if (!res.ok) throw new Error(`live session create failed: ${res.status} ${await res.text()}`);
-      const data = (await res.json()) as {
+      const data = await parseJsonResponse<{
         sdp: string;
         liveSessionId?: string;
         imagePushEnabled?: boolean;
-      };
+      }>(res);
       if (typeof data.imagePushEnabled === "boolean") {
         this.imagePushEnabled = data.imagePushEnabled;
       }

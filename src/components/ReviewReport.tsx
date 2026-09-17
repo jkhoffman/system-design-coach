@@ -1,5 +1,5 @@
 import type { GradeReport } from "@/lib/types";
-import { fmtMs } from "@/lib/rubric";
+import { fmtMs } from "@/lib/time";
 
 const SIGNAL_LABEL: Record<string, { label: string; cls: string }> = {
   strong_no_hire: { label: "Strong No Hire", cls: "bg-red-900 text-red-200" },

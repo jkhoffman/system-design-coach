@@ -28,10 +28,17 @@ export function createBoardExporter() {
       reader.readAsDataURL(blob);
     });
   };
+  const exportWithinDeadline = async (mimeType: "image/png" | "image/jpeg", signal?: AbortSignal) => {
+    const controller = new AbortController();
+    const combined = AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]);
+    const timer = setTimeout(() => controller.abort(new Error("Board export timed out")), 10_000);
+    try { return await bounded(exportImage(mimeType, combined), 10_000, combined); }
+    finally { clearTimeout(timer); controller.abort(); }
+  };
   return {
     setApi: (api: ExcalidrawImperativeAPI) => { board = api; },
     currentElements: () => board?.getSceneElements() ?? [],
-    exportPng: (signal?: AbortSignal) => bounded(exportImage("image/png", signal), 10_000, signal),
-    exportLiveImage: (signal?: AbortSignal) => bounded(exportImage("image/jpeg", signal), 10_000, signal),
+    exportPng: (signal?: AbortSignal) => exportWithinDeadline("image/png", signal),
+    exportLiveImage: (signal?: AbortSignal) => exportWithinDeadline("image/jpeg", signal),
   };
 }

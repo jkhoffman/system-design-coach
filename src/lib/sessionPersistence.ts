@@ -1,17 +1,8 @@
 import { delay } from "./async";
 import { fetchJson } from "./clientApi";
-import type { TimelineEvent, TranscriptTurn } from "./types";
-import type { LiveTraceEvent } from "./liveTrace";
-
-export interface FinalPayload {
-  kind: "finish";
-  endedAt: number;
-  transcript: TranscriptTurn[];
-  timeline: TimelineEvent[];
-  liveTrace?: LiveTraceEvent[];
-  finalScene?: readonly unknown[];
-  finalImage?: string | null;
-}
+import type { z } from "zod";
+import type { SessionPatchSchema } from "./schemas";
+export type FinalPayload = Extract<z.infer<typeof SessionPatchSchema>, { kind: "finish" }>;
 
 export async function persistFinalSession(id: string, payload: FinalPayload, signal: AbortSignal): Promise<void> {
   const body = JSON.stringify(payload);

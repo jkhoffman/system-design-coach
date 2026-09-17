@@ -1,10 +1,10 @@
+import { findSession } from "@/lib/sessionLookup";
 import { getGradingSession } from "@/lib/sessionQueries";
 import { getSessionJobStatus } from "@/lib/sessionJobs";
 import { gradingImages } from "@/lib/artifacts";
 import { claimJob, failJob, finishGrading, JOB_TIMING } from "@/lib/sessionJobs";
 import { createOpenAIClient } from "@/lib/openai";
 import { buildGradingInput, validateGradeReport } from "@/lib/rubric";
-import { validSessionId } from "@/lib/schemas";
 import { GRADE_FORMAT } from "@/lib/modelFormats";
 
 export const runtime = "nodejs";
@@ -12,8 +12,7 @@ export const maxDuration = 120;
 
 export async function POST(_request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  if (!validSessionId(id)) return Response.json({ error: "not found" }, { status: 404 });
-  const row = getGradingSession(id);
+  const row = findSession(id, getGradingSession);
   if (!row) return Response.json({ error: "not found" }, { status: 404 });
   if (row.grade) return Response.json({ grade: row.grade, status: "done" });
   if (row.status !== "ended") {

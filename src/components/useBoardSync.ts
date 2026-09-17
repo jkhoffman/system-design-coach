@@ -5,7 +5,7 @@ import type { LiveTransport } from "@/lib/liveSession";
 import type { Timeline } from "@/lib/timeline";
 import { elementsVersionKey, summarizeScene, type ExcalidrawElementLike } from "@/lib/summarizeScene";
 import { bounded } from "@/lib/async";
-import { fmtMs } from "@/lib/rubric";
+import { fmtMs } from "@/lib/time";
 
 const DRAWING_PAUSE_MS = 4000;
 const SNAPSHOT_MIN_GAP_MS = 45_000;

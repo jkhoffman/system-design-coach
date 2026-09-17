@@ -40,6 +40,10 @@ board timeline.
 
 ## Setup
 
+Use Node.js **22.18 or newer**. The app uses Node's built-in SQLite module;
+tests and maintenance scripts also use its module registration hooks. No separate
+database server is required.
+
 ```bash
 npm install
 # create .env with:
@@ -60,13 +64,30 @@ company/role briefing, or describe the interview you want in your own words
 ## Testing
 
 ```bash
-npm run check:pure      # deterministic logic checks
+npm run lint            # ESLint, including React lifecycle rules
+npm run typecheck       # generate Next route types, then check TypeScript
+npm test                # named deterministic Node test suites
+npm run check:pure      # alias for the same deterministic suites
 npm run test:e2e:mock   # no-cost browser E2E against a local OpenAI mock
 npm run smoke:live      # real GPT-Live smoke test (paid/stateful)
 npm run smoke:live:debug # instrumented GPT-Live protocol probe (paid/stateful)
 ```
 
-The mocked E2E builds the app, starts a temporary production server and local OpenAI-compatible server, stubs the browser's WebRTC/microphone APIs with Playwright, and uses a temporary SQLite directory. It does not call OpenAI.
+The mocked E2E builds the app with Webpack, starts a temporary production server
+and local OpenAI-compatible server, stubs the browser's WebRTC/microphone APIs with
+Playwright, and uses a temporary SQLite directory. It does not call OpenAI or read
+your saved interviews. It needs permission to spawn processes and bind local
+ports, plus a Playwright Chromium installation (`npx playwright install chromium`
+if it is missing). Webpack avoids Turbopack's subprocess port-binding restriction
+in constrained environments.
+
+Browser coverage includes completed interviews, checkpoint recovery, freeform and
+briefing generation, failed board uploads and final-save retries, expired jobs
+with concurrent review tabs, stale generation responses, duration selection, and
+hidden prompt content. Deterministic suites cover migrations, atomic writes,
+job leases, transport cancellation, schema validation, diagnostics, stream limits,
+media publication, pacing, timeline ordering, and scene summaries. Each database
+fixture and browser run closes its connections and removes its temporary data.
 
 The live debug smoke uses the real API. It records data-channel message order and byte sizes, verifies `response.completed` and `session.closed` arrive before teardown, draws a visual-only code, asserts the delegated backend reads that code from the image, and polls recording/grading to completion.
 
@@ -77,9 +98,10 @@ interview is running. Checkpoints and the final save persist the trace with the
 session so stalls can be analyzed after the fact. The trace records event
 direction/type, monotonic timestamps, response/delegation/tool IDs, byte counts,
 and short text previews; it does not store raw audio, image payloads, SDP, or
-OpenAI credentials. Event count, field lengths, object depth, and payload size
-are capped by `src/lib/liveTrace.ts`; there are currently no tracing environment
-switches.
+OpenAI credentials. `src/lib/traceContracts.ts` defines the shared event and field
+limits; unknown fields and malformed records are discarded at production and
+ingestion. Invalid diagnostic data does not reject valid transcript/timeline
+content. There are currently no tracing environment switches.
 
 Analyze a saved session without an OpenAI key:
 
@@ -100,6 +122,51 @@ tool-result continuation, backend response completion, context-append
 acknowledgment, and speech-output gaps. Missing signals are reported rather than
 assumed to be the cause. This instrumentation is diagnostic-only; it does not
 change prompts, models, timing, or retry behavior.
+
+## Persistence and recovery
+
+`APP_DATA_DIR` selects the storage directory (default: `data/`). It contains
+`app.db`, `snapshots/`, and `recordings/`. Ordered transactional migrations use
+SQLite's `user_version` and adopt existing databases automatically. Back up the
+whole directory together; paths and media references belong to that installation.
+
+Session creation reserves a connection attempt before contacting the model.
+Progress checkpoints carry increasing revisions, and the first accepted finish
+freezes interview content. Delayed checkpoints and repeated finish requests cannot
+replace finalized content. Reloading a live interview offers **Review saved
+progress**. A failed final save leaves the captured payload in the current page
+for **Retry save**; the microphone is already stopped.
+
+The review page owns grading and recording requests. Each job has an attempt
+token and an expiry; an interrupted attempt can be reclaimed, while its late
+response cannot overwrite a newer result. Grading has a 110-second operation
+deadline and a 150-second lease; recording has a 45-second deadline and a
+75-second lease. Failed jobs require an explicit retry. Polling is cancellable,
+bounded, and uses the small `/api/sessions/<id>/status` response.
+
+Recordings stream to an attempt-specific `.part` file. Only a completed download
+owned by the current attempt is published. Audio endpoints support byte ranges.
+Final board images are served by URL; older inline images remain readable.
+Session/status responses exclude image bytes, traces, and board scene JSON.
+
+Library and generated prompt specifications stay on the server. Setup receives
+only IDs, titles, and questions; generated specifications are saved in SQLite and
+resolved by ID at session creation. Editing inputs cancels and invalidates pending
+generation. Runtime contracts live in `schemas.ts` and `traceContracts.ts`; model
+formats are derived with the SDK's Zod helper, following the
+[Structured Outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
+
+## Code organization
+
+- `database.ts` / `migrations.ts`: connection ownership and schema upgrades.
+- `db.ts`, `sessionQueries.ts`, `sessionCommands.ts`: repository reads and guarded writes.
+- `sessionJobs.ts` / `pollJob.ts`: job ownership and client polling.
+- `useInterviewController.ts` / `liveSession.ts`: UI lifecycle and transport resources.
+- `artifacts.ts`: image validation, recording publication, and media serving.
+- `usePromptGeneration.ts`: setup request ownership and cancellation.
+
+The implementation sequence and acceptance criteria are recorded in
+[the refactoring plan](docs/refactoring-plan.md).
 
 ## Notes
 

@@ -102,7 +102,7 @@ export async function availableRecording(id: string): Promise<string | null> {
   if (!row?.recordingPath || row.recordingStatus !== "done") return null;
   let file: string;
   try { file = within(RECORDING_DIR, row.recordingPath); }
-  catch { return null; }
+  catch { resetMissingRecording(id, row.recordingPath); return null; }
   try { if ((await files.stat(file)).isFile()) return file; }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
   resetMissingRecording(id, row.recordingPath);

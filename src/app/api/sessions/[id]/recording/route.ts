@@ -1,3 +1,4 @@
+import { findSession } from "@/lib/sessionLookup";
 import { getRecordingSession } from "@/lib/sessionQueries";
 import { availableRecording, publishRecording, serveRecording } from "@/lib/artifacts";
 import { claimJob, failJob, JOB_TIMING } from "@/lib/sessionJobs";
@@ -14,8 +15,7 @@ function recordingStatusResponse(row: ReturnType<typeof getRecordingSession>, ex
 /** Download the stored GPT-Live recording (stereo WAV) for this session. */
 export async function POST(_request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  if (!validSessionId(id)) return Response.json({ error: "not found" }, { status: 404 });
-  let row = getRecordingSession(id);
+  let row = findSession(id, getRecordingSession);
   if (!row) return Response.json({ error: "not found" }, { status: 404 });
   if (row.status !== "ended" && row.status !== "graded") {
     return Response.json({ error: "session has not ended" }, { status: 409 });
