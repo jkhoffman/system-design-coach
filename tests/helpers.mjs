@@ -37,3 +37,16 @@ export const sessionInput = {
   prompt: { id: "test", title: "Test interview", question: "Design a service", context: "", factSheet: [{ q: "Scale?", a: "100 QPS" }], deepDiveAngles: ["Storage"] },
   durationSec: 300,
 };
+
+const owners = new Map();
+export function activateSession(commands, id, liveId = "live_test", storageAllowed = true) {
+  const token = commands.reserveSessionStart(id);
+  if (!commands.completeSessionStart(id, token, liveId, storageAllowed)) throw new Error("Attempt did not prepare");
+  const owner = commands.attemptOwner(id, token);
+  if (!commands.confirmSessionStart(id, owner)) throw new Error("Attempt did not confirm");
+  owners.set(id, owner);
+  return owner;
+}
+export function ownerFor(id) { return owners.get(id); }
+export function finishFields(id) { return { ...ownerFor(id), requestId: crypto.randomUUID() }; }
+export const sampleOwner = { ownerToken: "12345678-1234-4234-8234-123456789abc", generation: 1 };

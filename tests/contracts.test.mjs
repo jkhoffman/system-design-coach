@@ -1,3 +1,4 @@
+import { sampleOwner } from "./helpers.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { SessionPatchSchema, CreateSessionSchema, ExpandPromptSchema } from "../src/lib/schemas.ts";
@@ -5,14 +6,14 @@ import { sampleTrace } from "./fixtures.mjs";
 
 test("contracts", () => {
   assert.equal(
-    SessionPatchSchema.parse({ kind: "progress", revision: 1, transcript: [], timeline: [], liveTrace: sampleTrace })
+    SessionPatchSchema.parse({ kind: "progress", ...sampleOwner, revision: 1, transcript: [], timeline: [], liveTrace: sampleTrace })
       .liveTrace.length,
     sampleTrace.length
   );
   
   assert.throws(() =>
     SessionPatchSchema.parse({
-      kind: "progress", revision: 1,
+      kind: "progress", ...sampleOwner, revision: 1,
       transcript: [],
       timeline: [{ kind: "snapshot", startMs: 0, label: "bad", file: "../outside.png" }],
     })

@@ -15,7 +15,7 @@ function browser(t, options = {}) {
   Object.defineProperty(globalThis, "window", { value: globalThis, configurable: true });
   Object.defineProperty(globalThis, "document", { value: { createElement: () => ({ autoplay: false, srcObject: null }) }, configurable: true });
   installLiveBrowserStub(options);
-  t.mock.method(globalThis, "fetch", async () => Response.json({ sdp: "mock-answer" }));
+  t.mock.method(globalThis, "fetch", async () => Response.json({ sdp: "mock-answer", ownerToken: "12345678-1234-4234-8234-123456789abc", generation: 1 }));
   t.after(() => {
     for (const [key, descriptor] of originals) {
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
@@ -144,9 +144,52 @@ test("final-save retries use the same serialized snapshot", async (t) => {
   t.mock.method(globalThis, "fetch", async (_url, init) => {
     bodies.push(init.body);
     payload.endedAt = 2;
-    return bodies.length === 1 ? Response.json({ error: "temporary" }, { status: 503 }) : Response.json({ status: "ended" });
+    return bodies.length === 1 ? Response.json({ error: "temporary" }, { status: 503 }) : Response.json({ status: "ended", outcome: "saved" });
   });
   await persistFinalSession("test", payload, new AbortController().signal);
   assert.equal(bodies.length, 2);
   assert.equal(bodies[0], bodies[1]);
+});
+
+for (const failure of ["throwTrackStop", "throwChannelClose", "throwPeerClose"]) {
+  test(`shutdown completes every cleanup after ${failure}`, async (t) => {
+    const state = browser(t, { [failure]: true });
+    const live = transport();
+    await live.connect();
+    await live.close(false);
+    assert.equal(state.micTracksStopped, 1);
+    assert.equal(state.peerConnectionsClosed, 1);
+    assert.ok(live.traceSnapshot().some((event) => event.type === "teardown.error"));
+    assert.ok(live.traceSnapshot().some((event) => event.type === "teardown.complete"));
+  });
+}
+
+test("SDP failure cancels startup and confirmation is retried before announcing live", async (t) => {
+  const state = browser(t);
+  const remote = RTCPeerConnection.prototype.setRemoteDescription;
+  t.mock.method(RTCPeerConnection.prototype, "setRemoteDescription", async () => { throw new Error("bad SDP"); });
+  const actions = [];
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    const body = JSON.parse(init.body); actions.push(body.action ?? "create");
+    return Response.json({ sdp: "answer", ownerToken: crypto.randomUUID(), generation: 1 });
+  });
+  await assert.rejects(transport().connect(), /bad SDP/);
+  assert.deepEqual(actions, ["create", "cancel"]); assert.equal(state.micTracksStopped, 1);
+  t.mock.method(RTCPeerConnection.prototype, "setRemoteDescription", remote);
+  let confirms = 0, starts = 0;
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    if (JSON.parse(init.body).action === "confirm" && ++confirms === 1) return Response.json({}, { status: 503 });
+    return Response.json({ sdp: "answer", ownerToken: crypto.randomUUID(), generation: 2 });
+  });
+  const live = transport({ onStarted() { starts++; } }, { startupMs: 1000 });
+  await live.connect(); assert.equal(confirms, 2); assert.equal(starts, 1);
+  await live.close(false);
+});
+
+test("final-save conflicts stop retries and preserve the caller's payload", async (t) => {
+  let calls = 0;
+  t.mock.method(globalThis, "fetch", async () => { calls++; return Response.json({ error: "ownership conflict" }, { status: 409 }); });
+  const payload = { kind: "finish", transcript: [{ text: "local work" }] };
+  await assert.rejects(persistFinalSession("test", payload, new AbortController().signal), /ownership conflict/);
+  assert.equal(calls, 1); assert.equal(payload.transcript[0].text, "local work");
 });

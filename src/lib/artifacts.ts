@@ -5,14 +5,15 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { RECORDING_DIR, SNAPSHOT_DIR } from "./database";
+import { DATA_DIR, RECORDING_DIR, SNAPSHOT_DIR } from "./database";
 import { HttpError } from "./http";
 import { validSessionId, SNAPSHOT_FILE_RE, MAX_PNG_DATA_URL_CHARS } from "./schemas";
 import { getFinalImageReference, getRecordingSession } from "./sessionQueries";
-import { finishRecording, ownsJob, resetMissingRecording, type JobAttempt } from "./sessionJobs";
+import { finishRecording, ownsJob, type JobAttempt } from "./sessionJobs";
 import type { TimelineEvent } from "./types";
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+export class RecordingContentError extends Error {}
 const MAX_RECORDING_BYTES = 2 * 1024 * 1024 * 1024;
 function sessionDirectory(id: string) {
   if (!validSessionId(id)) throw new HttpError(404, "not found");
@@ -22,6 +23,30 @@ function within(root: string, candidate: string): string {
   const file = path.resolve(candidate);
   if (!file.startsWith(path.resolve(root) + path.sep)) throw new HttpError(404, "not found");
   return file;
+}
+
+/** Rebase only recognized, session-scoped legacy names; never open the old absolute path. */
+async function resolveArtifact(id: string, reference: string, kind: "image" | "recording"): Promise<string | null> {
+  if (!validSessionId(id)) return null;
+  const name = path.basename(reference);
+  const root = kind === "image" ? sessionDirectory(id) : RECORDING_DIR;
+  const validName = kind === "image" ? /^final-[a-f0-9-]{36}\.(png|jpeg|webp)$/.test(name)
+    : new RegExp(`^${id}(?:-[a-f0-9-]{36})?\\.wav$`).test(name);
+  if (!validName) return null;
+  const expected = path.join(root, name);
+  if (path.isAbsolute(reference)) {
+    const parent = path.basename(path.dirname(reference));
+    if (parent !== (kind === "image" ? id : "recordings")) return null;
+  } else if (path.resolve(DATA_DIR, reference) !== expected) return null;
+  try {
+    // Also reject symlinks that escape the configured directory.
+    const real = await files.realpath(expected);
+    within(await files.realpath(root), real);
+    return (await files.stat(real)).isFile() ? expected : null;
+  } catch (error) {
+    if (error instanceof HttpError || ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) return null;
+    throw error;
+  }
 }
 
 export function decodeImage(dataUrl: string) {
@@ -50,9 +75,9 @@ export async function saveSnapshot(id: string, startMs: number, dataUrl: string)
   return name;
 }
 
-export async function readSnapshot(id: string, name: string): Promise<Buffer | null> {
+export async function readSnapshot(id: string, name: string, signal?: AbortSignal): Promise<Buffer | null> {
   if (!SNAPSHOT_FILE_RE.test(name)) return null;
-  try { return await files.readFile(path.join(sessionDirectory(id), name)); }
+  try { return await files.readFile(path.join(sessionDirectory(id), name), { signal }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 
@@ -62,22 +87,23 @@ export async function saveFinalImage(id: string, dataUrl: string): Promise<strin
   await files.mkdir(directory, { recursive: true });
   const file = path.join(directory, `final-${randomUUID()}.${image.extension}`);
   await files.writeFile(file, image.bytes, { flag: "wx" });
-  return file;
+  return path.relative(DATA_DIR, file);
 }
 
 export async function discardFinalImage(id: string, file: string): Promise<void> {
-  await files.rm(within(sessionDirectory(id), file), { force: true });
+  await files.rm(within(sessionDirectory(id), path.resolve(DATA_DIR, file)), { force: true });
 }
 
-export async function readFinalImage(id: string): Promise<{ bytes: Buffer; mimeType: string } | null> {
+export async function readFinalImage(id: string, signal?: AbortSignal): Promise<{ bytes: Buffer; mimeType: string } | null> {
   const reference = getFinalImageReference(id);
   if (!reference) return null;
   if (reference.path) {
-    const file = within(sessionDirectory(id), reference.path);
-    const extension = path.extname(file).slice(1);
-    if (!["png", "jpeg", "webp"].includes(extension)) return null;
-    try { return { bytes: await files.readFile(file), mimeType: `image/${extension}` }; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    const file = await resolveArtifact(id, reference.path, "image");
+    if (file) {
+      const extension = path.extname(file).slice(1);
+      try { return { bytes: await files.readFile(file, { signal }), mimeType: `image/${extension}` }; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+    }
   }
   if (reference.inline) {
     try { return decodeImage(reference.inline); } catch { return null; }
@@ -85,35 +111,31 @@ export async function readFinalImage(id: string): Promise<{ bytes: Buffer; mimeT
   return null;
 }
 
-export async function gradingImages(id: string, timeline: TimelineEvent[]) {
+export async function gradingImages(id: string, timeline: TimelineEvent[], signal?: AbortSignal) {
   const images: { type: "input_image"; image_url: string; detail: "high" }[] = [];
   const names = timeline.filter((e) => e.kind === "snapshot").slice(0, 10).map((e) => e.file);
   for (const name of names) {
-    const bytes = await readSnapshot(id, name);
+    signal?.throwIfAborted();
+    const bytes = await readSnapshot(id, name, signal);
     if (bytes) images.push({ type: "input_image", image_url: `data:image/png;base64,${bytes.toString("base64")}`, detail: "high" });
   }
-  const final = await readFinalImage(id);
+  signal?.throwIfAborted();
+  const final = await readFinalImage(id, signal);
   if (final) images.push({ type: "input_image", image_url: `data:${final.mimeType};base64,${final.bytes.toString("base64")}`, detail: "high" });
   return images;
 }
 
 export async function availableRecording(id: string): Promise<string | null> {
   const row = getRecordingSession(id);
-  if (!row?.recordingPath || row.recordingStatus !== "done") return null;
-  let file: string;
-  try { file = within(RECORDING_DIR, row.recordingPath); }
-  catch { resetMissingRecording(id, row.recordingPath); return null; }
-  try { if ((await files.stat(file)).isFile()) return file; }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
-  resetMissingRecording(id, row.recordingPath);
-  return null;
+  if (!row?.recordingPath) return null;
+  return resolveArtifact(id, row.recordingPath, "recording");
 }
 
 /** Download privately, validate the container, then publish a complete file for the current owner. */
-export async function publishRecording(response: Response, attempt: JobAttempt, signal: AbortSignal): Promise<void> {
+export async function publishRecording(response: Response, attempt: JobAttempt, signal: AbortSignal, idleMs = 60_000): Promise<void> {
   if (attempt.kind !== "recording" || !validSessionId(attempt.id) || !/^[a-f0-9-]{36}$/.test(attempt.token)) throw new Error("invalid recording attempt");
-  if (!response.body) throw new Error("empty recording response");
-  if (Number(response.headers.get("content-length")) > MAX_RECORDING_BYTES) throw new Error("recording too large");
+  if (!response.body) throw new RecordingContentError("empty recording response");
+  if (Number(response.headers.get("content-length")) > MAX_RECORDING_BYTES) throw new RecordingContentError("recording too large");
   await files.mkdir(RECORDING_DIR, { recursive: true });
   const file = path.join(RECORDING_DIR, `${attempt.id}-${attempt.token}.wav`);
   const temporary = `${file}.part`;
@@ -121,31 +143,40 @@ export async function publishRecording(response: Response, attempt: JobAttempt, 
   let bytes = 0;
   let header = Buffer.alloc(0);
   let validated = false;
+  const idle = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout>;
+  const activity = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => idle.abort(new Error("Recording transfer stopped making progress")), idleMs);
+  };
+  activity();
   const validate = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
+      activity();
       bytes += chunk.length;
-      if (bytes > MAX_RECORDING_BYTES) return callback(new Error("recording too large"));
+      if (bytes > MAX_RECORDING_BYTES) return callback(new RecordingContentError("recording too large"));
       if (!validated) {
         header = Buffer.concat([header, chunk]);
         if (header.length < 12) return callback();
         if (header.subarray(0, 4).toString() !== "RIFF" || header.subarray(8, 12).toString() !== "WAVE") {
-          return callback(new Error("recording is not WAV audio"));
+          return callback(new RecordingContentError("recording is not WAV audio"));
         }
         validated = true;
         this.push(header); header = Buffer.alloc(0); callback();
       } else callback(null, chunk);
     },
-    flush(callback) { callback(validated && bytes >= 44 ? null : new Error("truncated WAV recording")); },
+    flush(callback) { callback(validated && bytes >= 44 ? null : new RecordingContentError("truncated WAV recording")); },
   });
   try {
     await pipeline(Readable.fromWeb(response.body as import("node:stream/web").ReadableStream), validate,
-      fs.createWriteStream(temporary, { flags: "wx" }), { signal });
+      fs.createWriteStream(temporary, { flags: "wx" }), { signal: AbortSignal.any([signal, idle.signal]) });
     signal.throwIfAborted();
     if (!ownsJob(attempt)) throw new Error("recording attempt expired or superseded");
     await files.rename(temporary, file);
-    if (!finishRecording(attempt, file)) throw new Error("recording attempt expired or superseded");
+    if (!finishRecording(attempt, path.relative(DATA_DIR, file))) throw new Error("recording attempt expired or superseded");
     published = true;
   } finally {
+    clearTimeout(idleTimer!);
     await files.rm(temporary, { force: true });
     if (!published) await files.rm(file, { force: true });
   }
@@ -153,7 +184,12 @@ export async function publishRecording(response: Response, attempt: JobAttempt, 
 
 export async function serveRecording(file: string, request: Request): Promise<Response> {
   file = within(RECORDING_DIR, file);
-  const { size } = await files.stat(file);
+  let size: number;
+  try { size = (await files.stat(file)).size; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return Response.json({ error: "no recording" }, { status: 404 });
+    throw error;
+  }
   const headers = { "Content-Type": "audio/wav", "Accept-Ranges": "bytes" };
   const range = request.headers.get("range");
   if (range) {

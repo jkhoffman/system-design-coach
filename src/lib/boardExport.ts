@@ -31,9 +31,8 @@ export function createBoardExporter() {
   const exportWithinDeadline = async (mimeType: "image/png" | "image/jpeg", signal?: AbortSignal) => {
     const controller = new AbortController();
     const combined = AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]);
-    const timer = setTimeout(() => controller.abort(new Error("Board export timed out")), 10_000);
     try { return await bounded(exportImage(mimeType, combined), 10_000, combined); }
-    finally { clearTimeout(timer); controller.abort(); }
+    finally { controller.abort(); }
   };
   return {
     setApi: (api: ExcalidrawImperativeAPI) => { board = api; },

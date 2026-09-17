@@ -1,6 +1,6 @@
 import { findSession } from "@/lib/sessionLookup";
 import { saveSnapshot, readSnapshot } from "@/lib/artifacts";
-import { getSessionAcknowledgment } from "@/lib/sessionCommands";
+import { getSessionAcknowledgment, ownsSession } from "@/lib/sessionCommands";
 import { errorResponse, readJsonBody } from "@/lib/http";
 import { SnapshotRequestSchema, validSessionId, MAX_PNG_DATA_URL_CHARS } from "@/lib/schemas";
 
@@ -8,11 +8,14 @@ export const runtime = "nodejs";
 export async function POST(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   try {
-    const body = SnapshotRequestSchema.parse(await readJsonBody(request, MAX_PNG_DATA_URL_CHARS + 1024));
     const session = findSession(id, getSessionAcknowledgment);
     if (!session) return Response.json({ error: "not found" }, { status: 404 });
     if (session.status !== "live") return Response.json({ error: "session is not live" }, { status: 409 });
-    return Response.json({ file: await saveSnapshot(id, body.startMs, body.png) });
+    const body = SnapshotRequestSchema.parse(await readJsonBody(request, MAX_PNG_DATA_URL_CHARS + 1024));
+    if (!ownsSession(id, body)) return Response.json({ error: "Connection ownership changed" }, { status: 409 });
+    const file = await saveSnapshot(id, body.startMs, body.png);
+    if (!ownsSession(id, body)) return Response.json({ error: "Session ended before snapshot publication" }, { status: 409 });
+    return Response.json({ file });
   } catch (error) { return errorResponse(error); }
 }
 

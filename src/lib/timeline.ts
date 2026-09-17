@@ -12,6 +12,8 @@ export class Timeline {
   private openTurn: TranscriptTurn | null = null;
   private listeners = new Set<() => void>();
 
+  reset(): void { this.events = []; this.openTurn = null; this.emit(); }
+
   subscribe(fn: () => void): () => void {
     this.listeners.add(fn);
     return () => this.listeners.delete(fn);

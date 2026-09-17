@@ -11,7 +11,7 @@ import type { ClientSession } from "@/lib/types";
 export default function InterviewRoom({ session }: { session: ClientSession }) {
   const [showPrompt, setShowPrompt] = useState(false);
   const { phase, statusDetail, elapsedSec, muted, thinking, events, error, checkpointError,
-    start, endInterview, saveAndFinish, recoverSavedInterview, toggleMute, onBoardApi, onWhiteboardChange,
+    start, endInterview, retryFinalization, exportLocalWork, prepared, recoverSavedInterview, toggleMute, onBoardApi, onWhiteboardChange,
   } = useInterviewController(session);
 
   return (
@@ -78,9 +78,10 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
                       The last checkpoint was saved before this page reloaded. You can end the
                       interrupted interview and review what was captured.
                     </p>
+                    {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
                     <div className="flex justify-center gap-3">
                       <button
-                        onClick={recoverSavedInterview}
+                        onClick={() => void recoverSavedInterview()}
                         className="rounded-lg bg-emerald-600 px-5 py-2 font-medium hover:bg-emerald-500"
                       >
                         Review saved progress
@@ -123,11 +124,12 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
                   <>
                     <p className="text-red-300">{error}</p>
                     <button
-                      onClick={() => void saveAndFinish()}
+                      onClick={retryFinalization}
                       className="mt-4 rounded-lg bg-emerald-600 px-5 py-2 font-medium hover:bg-emerald-500"
                     >
-                      Retry save
+                      {prepared ? "Retry save" : "Retry preparation"}
                     </button>
+                    <button onClick={exportLocalWork} className="mt-3 block w-full text-sm underline">Export local work</button>
                   </>
                 ) : (
                   <p className="text-neutral-300">Wrapping up — saving the interview…</p>

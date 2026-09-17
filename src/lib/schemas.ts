@@ -72,9 +72,14 @@ export const TimelineEventSchema = z.discriminatedUnion("kind", [
   }),
 ]);
 
+export const SessionOwnerSchema = z.object({ ownerToken: z.string().uuid(), generation: z.number().int().positive() });
+const ownerFields = SessionOwnerSchema.shape;
+export const ConnectionCommandSchema = SessionOwnerSchema.extend({ action: z.enum(["confirm", "heartbeat", "cancel"]) });
+
 export const SessionPatchSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("progress"),
+    ...ownerFields,
     revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     transcript: z.array(TranscriptTurnSchema).max(20_000),
     timeline: z.array(TimelineEventSchema).max(50_000),
@@ -82,6 +87,8 @@ export const SessionPatchSchema = z.discriminatedUnion("kind", [
   }),
   z.object({
     kind: z.literal("finish"),
+    ...ownerFields,
+    requestId: z.string().uuid(),
     endedAt: z.number().int().positive(),
     transcript: z.array(TranscriptTurnSchema).max(20_000),
     timeline: z.array(TimelineEventSchema).max(50_000),
@@ -102,11 +109,13 @@ export const CreateSessionSchema = z.discriminatedUnion("mode", [
 ]);
 
 export const LiveSessionRequestSchema = z.object({
+  ownerToken: z.string().uuid(),
   sessionId: z.string().regex(SESSION_ID_RE),
   sdp: z.string().min(1).max(128 * 1024),
 });
 
 export const SnapshotRequestSchema = z.object({
+  ...ownerFields,
   startMs: timeMs,
   label: z.string().trim().min(1).max(100).default("milestone"),
   png: z

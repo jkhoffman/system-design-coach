@@ -1,3 +1,4 @@
+import { activateSession, sampleOwner, finishFields } from "./helpers.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { GradeReportSchema, SessionPatchSchema, CreateSessionSchema, LiveTraceSchema } from "../src/lib/schemas.ts";
@@ -55,7 +56,7 @@ test("trace producer and ingestion share limits and discard unknown payload", ()
   trace.incoming(JSON.stringify({ type: "error", error: { message: "x".repeat(20_000) } }));
   trace.mark("long.detail", "x".repeat(10_000));
   assert.ok(LiveTraceSchema.safeParse(trace.snapshot()).success);
-  const command = SessionPatchSchema.parse({ kind: "finish", endedAt: 1, transcript: [], timeline: [],
+  const command = SessionPatchSchema.parse({ kind: "finish", ...sampleOwner, requestId: crypto.randomUUID(), endedAt: 1, transcript: [], timeline: [],
     liveTrace: [null, { ...trace.snapshot()[1], rawAudio: "private", error: "x".repeat(20_000), offsetMs: -10 }] });
   assert.equal(command.liveTrace.length, 1);
   assert.equal(command.liveTrace[0].error.length, 2000);
@@ -82,12 +83,12 @@ test("mixed clocks and reordered acknowledgments retain correct durations; unsen
 
 const { db } = await databaseFixture();
 test("invalid diagnostics do not block a real final save", async () => {
-  const { reserveSessionStart, completeSessionStart } = await import("../src/lib/sessionCommands.ts");
+  const commands = await import("../src/lib/sessionCommands.ts");
   const { PATCH } = await import("../src/app/api/sessions/[id]/route.ts");
   const session = db.createSession(sessionInput);
-  completeSessionStart(session.id, reserveSessionStart(session.id), "live");
+  activateSession(commands, session.id);
   const response = await PATCH(new Request("http://localhost/session", { method: "PATCH", body: JSON.stringify({
-    kind: "finish", endedAt: Date.now(), transcript: [], timeline: [], liveTrace: [{ garbage: "value" }],
+    kind: "finish", ...finishFields(session.id), endedAt: Date.now(), transcript: [], timeline: [], liveTrace: [{ garbage: "value" }],
   }) }), { params: Promise.resolve({ id: session.id }) });
   assert.equal(response.status, 200);
   assert.equal(db.getSession(session.id).status, "ended");

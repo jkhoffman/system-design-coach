@@ -1,6 +1,7 @@
+import type { SessionOwner } from "./ownership";
 import { LiveTrace, type LiveTraceEvent } from "./liveTrace";
-import { bounded } from "./async";
-import { parseJsonResponse } from "./clientApi";
+import { bounded, delay } from "./async";
+import { parseJsonResponse, fetchJson, ApiError } from "./clientApi";
 import { LiveActivity, parseLiveEvent, type LiveEvent } from "./liveProtocol";
 
 /**
@@ -27,6 +28,7 @@ export interface LiveEvents {
 }
 
 export interface LiveTransport {
+  owner: SessionOwner | null;
   /** ms timestamp of session start on the session timeline (0) mapped to perf clock. */
   sessionT0(): number | null;
   /** Whether the server allows live board images to be queued. */
@@ -46,6 +48,8 @@ let counter = 0;
 const eid = (p: string) => `${p}_${Date.now().toString(36)}_${counter++}`;
 
 export class GptLiveTransport implements LiveTransport {
+  owner: SessionOwner | null = null;
+  private confirmed = false;
   private pc: RTCPeerConnection | null = null;
   private dc: RTCDataChannel | null = null;
   private mic: MediaStream | null = null;
@@ -195,15 +199,16 @@ export class GptLiveTransport implements LiveTransport {
       const res = await fetch("/api/live/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: this.sessionDbId, sdp: pc.localDescription?.sdp }),
+        body: JSON.stringify({ ownerToken: crypto.randomUUID(), sessionId: this.sessionDbId, sdp: pc.localDescription?.sdp }),
         signal: activeSignal,
       });
       this.trace.mark("live_api.response", String(res.status));
       const data = await parseJsonResponse<{
-        sdp: string;
+        sdp: string; ownerToken: string; generation: number;
         liveSessionId?: string;
         imagePushEnabled?: boolean;
       }>(res);
+      this.owner = { ownerToken: data.ownerToken, generation: data.generation };
       if (typeof data.imagePushEnabled === "boolean") {
         this.imagePushEnabled = data.imagePushEnabled;
       }
@@ -215,9 +220,31 @@ export class GptLiveTransport implements LiveTransport {
       this.assertActive(activeSignal);
       if (!this.sessionStarted) await bounded(new Promise<void>((resolve) => { this.startWaiter = resolve; }), this.timing.startupMs, activeSignal);
       this.assertActive(activeSignal);
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await fetchJson(`/api/sessions/${this.sessionDbId}/connection`, { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "confirm", ...this.owner }),
+            signal: AbortSignal.any([activeSignal, AbortSignal.timeout(10_000)]),
+          });
+          break;
+        } catch (error) {
+          if (activeSignal.aborted || attempt === 2 || (error instanceof ApiError && error.status < 500)) throw error;
+          await delay(250, activeSignal);
+        }
+      }
+      this.assertActive(activeSignal);
+      this.confirmed = true;
+      this.ev.onStarted(data.liveSessionId ?? "");
+      this.ev.onStatus("live");
     } catch (err) {
       this.trace.mark("connect.error", err instanceof Error ? err.message : String(err));
       await this.close(false);
+      if (this.owner) {
+        await fetchJson(`/api/sessions/${this.sessionDbId}/connection`, { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "cancel", ...this.owner }),
+          signal: AbortSignal.timeout(20_000),
+        }).catch(() => { this.trace.mark("cancel.failed", "Startup lease will expire; server reconciliation is required"); });
+      }
       throw err;
     } finally {
       clearTimeout(timeout);
@@ -272,7 +299,7 @@ export class GptLiveTransport implements LiveTransport {
     if (this.endedNotified) return;
     this.clearDisconnectTimer();
     this.endedNotified = true;
-    this.ev.onEnded(reason);
+    if (this.confirmed) this.ev.onEnded(reason);
   }
 
   private handleMessage(raw: string): void {
@@ -287,8 +314,7 @@ export class GptLiveTransport implements LiveTransport {
         this.startWaiter?.();
         this.t0 = performance.now();
         this.sessionStarted = true;
-        this.ev.onStarted(ev.session?.id ?? "");
-        this.ev.onStatus("live");
+
         return;
       case "session.input_transcript.delta":
         this.ev.onTranscript("candidate", ev.delta ?? "", ev.start_ms ?? 0, ev.end_ms ?? 0);
@@ -447,10 +473,14 @@ export class GptLiveTransport implements LiveTransport {
 
   private async shutdown(graceful: boolean): Promise<void> {
     this.trace.mark("close.requested", graceful ? "graceful" : "immediate");
-    this.lifetime.abort();
-    this.clearDisconnectTimer();
-    this.cleanups.forEach((cleanup) => cleanup());
-    this.mic?.getTracks().forEach((track) => track.stop());
+    const safely = (cleanup: () => void) => {
+      try { cleanup(); } catch (error) { this.trace.mark("teardown.error", String(error)); }
+    };
+    safely(() => this.lifetime.abort());
+    safely(() => this.clearDisconnectTimer());
+    this.cleanups.forEach(safely);
+    this.cleanups.clear();
+    safely(() => this.mic?.getTracks().forEach((track) => safely(() => track.stop())));
     this.mic = null;
     // Install the waiter before sending; adapters can acknowledge synchronously.
     const acknowledged = new Promise<void>((resolve) => { this.closeWaiter = resolve; });
@@ -470,17 +500,17 @@ export class GptLiveTransport implements LiveTransport {
     this.mic = null;
     this.audioEl = null;
     if (dc) {
-      dc.onopen = null;
-      dc.onmessage = null;
-      dc.onclose = null;
-      dc.close();
+      safely(() => { dc.onopen = null; });
+      safely(() => { dc.onmessage = null; });
+      safely(() => { dc.onclose = null; });
+      safely(() => dc.close());
     }
     if (pc) {
-      pc.ontrack = null;
-      pc.onconnectionstatechange = null;
-      pc.close();
+      safely(() => { pc.ontrack = null; });
+      safely(() => { pc.onconnectionstatechange = null; });
+      safely(() => pc.close());
     }
-    if (audioEl) audioEl.srcObject = null;
+    if (audioEl) safely(() => { audioEl.srcObject = null; });
     this.toolResults = [];
     this.trace.mark("teardown.complete");
   }

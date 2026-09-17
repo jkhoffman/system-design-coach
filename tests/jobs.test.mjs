@@ -1,3 +1,4 @@
+import { activateSession, finishFields } from "./helpers.mjs";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { databaseFixture, fakeClock, sessionInput } from "./helpers.mjs";
@@ -5,12 +6,13 @@ import { gradeReport } from "../scripts/mock-fixtures.mjs";
 
 const { db } = await databaseFixture();
 const jobs = await import("../src/lib/sessionJobs.ts");
-const { reserveSessionStart, completeSessionStart, finishSession } = await import("../src/lib/sessionCommands.ts");
+const commands = await import("../src/lib/sessionCommands.ts");
+const { finishSession } = commands;
 const { getDb } = await import("../src/lib/database.ts");
 function endedSession() {
   const id = db.createSession(sessionInput).id;
-  completeSessionStart(id, reserveSessionStart(id), "live_job");
-  finishSession(id, { endedAt: Date.now(), transcript: [], timeline: [] });
+  activateSession(commands, id, "live_job");
+  finishSession(id, { ...finishFields(id), endedAt: Date.now(), transcript: [], timeline: [] });
   return id;
 }
 
@@ -58,8 +60,8 @@ test("legacy running jobs are reclaimable and status reads do not parse intervie
 
 test("unavailable recordings cannot be claimed", () => {
   const id = db.createSession(sessionInput).id;
-  completeSessionStart(id, reserveSessionStart(id), "live_unstored", false);
-  finishSession(id, { endedAt: Date.now(), transcript: [], timeline: [] });
+  activateSession(commands, id, "live_unstored", false);
+  finishSession(id, { ...finishFields(id), endedAt: Date.now(), transcript: [], timeline: [] });
   assert.equal(jobs.getSessionJobStatus(id).recording.status, "unavailable");
   assert.equal(jobs.claimJob(id, "recording"), null);
 });

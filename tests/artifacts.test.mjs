@@ -1,3 +1,4 @@
+import { activateSession, finishFields } from "./helpers.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -15,12 +16,12 @@ const { GET: image } = await import("../src/app/api/sessions/[id]/image/route.ts
 const png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aYVkAAAAASUVORK5CYII=";
 function started() {
   const session = db.createSession(sessionInput);
-  commands.completeSessionStart(session.id, commands.reserveSessionStart(session.id), "test_live");
+  activateSession(commands, session.id);
   return session.id;
 }
 function ended() {
   const id = started();
-  commands.finishSession(id, { endedAt: Date.now(), transcript: [], timeline: [] });
+  commands.finishSession(id, { ...finishFields(id), endedAt: Date.now(), transcript: [], timeline: [] });
   return id;
 }
 function wav(value = 1) {
@@ -31,8 +32,9 @@ function wav(value = 1) {
 
 test("final images are externalized once and legacy inline boards still render", async () => {
   const id = started();
+  const identity = { ...finishFields(id), endedAt: Date.now() };
   const finish = (image) => PATCH(new Request("http://localhost", { method: "PATCH", body: JSON.stringify({
-    kind: "finish", endedAt: Date.now(), transcript: [], timeline: [], finalImage: image,
+    kind: "finish", ...identity, transcript: [], timeline: [], finalImage: image,
   }) }), { params: Promise.resolve({ id }) });
   assert.equal((await finish(png)).status, 200);
   const raw = getDb().prepare("SELECT final_image, final_image_path FROM interview_sessions WHERE id = ?").get(id);
@@ -99,7 +101,8 @@ test("a stale download cannot overwrite the published recording; seeking and mis
   assert.deepEqual(Buffer.from(await responseRange.arrayBuffer()), wav(2).subarray(12, 20));
   await fs.rm(file);
   assert.equal(await artifacts.availableRecording(id), null);
-  assert.equal(jobs.getSessionJobStatus(id).recording.status, "idle");
+  assert.equal(jobs.getSessionJobStatus(id).recording.status, "done");
+  assert.ok(queries.getRecordingSession(id).recordingPath);
 });
 
 test("lightweight queries do not parse unrelated interview content or include inline images", () => {

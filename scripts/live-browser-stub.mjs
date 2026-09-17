@@ -32,6 +32,7 @@ export function installLiveBrowserStub(options = {}) {
       if (this.readyState === "ended") return;
       this.readyState = "ended";
       state.micTracksStopped++;
+      if (options.throwTrackStop) throw new Error("track stop failed");
     }
   }
 
@@ -229,6 +230,7 @@ export function installLiveBrowserStub(options = {}) {
       if (this.readyState === "closed") return;
       this.readyState = "closed";
       if (this.onclose) this.onclose();
+      if (options.throwChannelClose) throw new Error("channel close failed");
     }
   }
 
@@ -289,6 +291,7 @@ export function installLiveBrowserStub(options = {}) {
       state.peerClosedAt = performance.now();
       this.dataChannel?.close();
       if (this.onconnectionstatechange) this.onconnectionstatechange();
+      if (options.throwPeerClose) throw new Error("peer close failed");
     }
   }
 
