@@ -1,4 +1,4 @@
-export function installLiveBrowserStub() {
+export function installLiveBrowserStub(options = {}) {
   const state = {
     getUserMediaCalls: 0,
     tracksAdded: 0,
@@ -53,6 +53,7 @@ export function installLiveBrowserStub() {
   const mediaDevices = navigator.mediaDevices ?? {};
   mediaDevices.getUserMedia = async () => {
     state.getUserMediaCalls++;
+    if (options.microphoneDelayMs) await new Promise((resolve) => setTimeout(resolve, options.microphoneDelayMs));
     return new FakeMediaStream();
   };
   try {
@@ -148,8 +149,9 @@ export function installLiveBrowserStub() {
         const content = String(message.content ?? "");
         if (content.includes("[whiteboard state")) {
           state.boardSummaries++;
+          for (let call = 0; call < (options.overlappingToolCalls ?? 1); call++) {
           state.toolCalls++;
-          this.emit({ type: "session.delegation.created" });
+          this.emit({ type: "session.delegation.created", delegation_id: `delegation_${state.boardSummaries}_${call}` });
           this.emit({ type: "response.event", event: { type: "response.created" } });
           this.emit({
             type: "response.event",
@@ -157,12 +159,13 @@ export function installLiveBrowserStub() {
               type: "response.output_item.done",
               item: {
                 type: "function_call",
-                call_id: `call_board_${state.boardSummaries}`,
+                call_id: `call_board_${state.boardSummaries}_${call}`,
                 name: "view_whiteboard",
                 arguments: JSON.stringify({ reason: "mock board check" }),
               },
             },
           });
+          }
         }
         return;
       }
@@ -213,7 +216,7 @@ export function installLiveBrowserStub() {
 
       if (message.type === "session.close") {
         state.closeRequests++;
-        this.emit({ type: "session.closed", reason: "ended" });
+        if (!options.omitCloseAck) setTimeout(() => this.emit({ type: "session.closed", reason: "ended" }), options.closeDelayMs ?? 0);
       }
     }
 
@@ -259,12 +262,19 @@ export function installLiveBrowserStub() {
       this.remoteDescription = description;
       state.remoteDescriptions.push(description.sdp);
       this.connectionState = "connected";
+      state.emit = (event) => this.dataChannel?.emit(event);
+      state.disconnect = () => {
+        this.connectionState = "failed";
+        this.onconnectionstatechange?.();
+      };
+      if (options.disconnectAfterMs != null) setTimeout(state.disconnect, options.disconnectAfterMs);
+      if (options.omitSessionStart) return;
       setTimeout(() => {
         this.dataChannel?.emit({
           type: "session.started",
           session: { id: "browser_live_mock" },
         });
-      }, 10);
+      }, options.startDelayMs ?? 10);
     }
 
     close() {

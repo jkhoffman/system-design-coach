@@ -9,10 +9,12 @@
     "start": "next start --hostname 127.0.0.1",
     "lint": "eslint",
     "check:pure": "node scripts/check-pure.mjs",
-    "test:e2e:mock": "npm run build && node scripts/e2e-mock.mjs",
+    "test:e2e:mock": "npm run build -- --webpack && node scripts/e2e-mock.mjs",
     "smoke:live": "node scripts/live-smoke.mjs",
     "smoke:live:debug": "node scripts/live-smoke-debug.mjs",
-    "trace:report": "node scripts/live-trace-report.mjs"
+    "trace:report": "node scripts/live-trace-report.mjs",
+    "typecheck": "next typegen && tsc --noEmit",
+    "test": "npm run check:pure"
   },
   "dependencies": {
     "@excalidraw/excalidraw": "^0.18.1",
@@ -32,5 +34,9 @@
     "playwright": "^1.63.0",
     "tailwindcss": "^4",
     "typescript": "^5"
-  }
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "type": "module"
 }
