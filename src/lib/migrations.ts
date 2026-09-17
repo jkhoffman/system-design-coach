@@ -1,3 +1,4 @@
+import { readStoredGrade } from "./legacyContracts";
 import type { DatabaseSync } from "node:sqlite";
 
 const migrations: ((db: DatabaseSync) => void)[] = [
@@ -41,6 +42,27 @@ const migrations: ((db: DatabaseSync) => void)[] = [
     id TEXT PRIMARY KEY, spec TEXT NOT NULL, created_at INTEGER NOT NULL
   )`),
   (db) => db.exec("ALTER TABLE interview_sessions ADD COLUMN final_image_path TEXT"),
+  (db) => db.exec(`
+    CREATE TABLE connection_attempts (
+      generation INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+      token TEXT NOT NULL UNIQUE, state TEXT NOT NULL DEFAULT 'starting',
+      upstream_id TEXT, storage_allowed INTEGER NOT NULL DEFAULT 1,
+      cleanup TEXT NOT NULL DEFAULT 'none', cleanup_error TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX connection_attempts_session ON connection_attempts(session_id);
+    ALTER TABLE interview_sessions ADD COLUMN finish_key TEXT;
+    ALTER TABLE interview_sessions ADD COLUMN finish_hash TEXT;
+    -- Pre-ownership live sessions can only be recovered from their saved checkpoint.
+    UPDATE interview_sessions SET start_token = NULL, start_expires_at = NULL;
+  `),
+  (db) => {
+    db.exec("ALTER TABLE interview_sessions ADD COLUMN grade_readable INTEGER");
+    const update = db.prepare("UPDATE interview_sessions SET grade_readable = ? WHERE id = ?");
+    for (const row of db.prepare("SELECT id, grade FROM interview_sessions WHERE grade IS NOT NULL").all()) {
+      update.run(readStoredGrade(row.grade).state === "readable" ? 1 : 0, row.id);
+    }
+  },
 ];
 
 export const SCHEMA_VERSION = migrations.length;

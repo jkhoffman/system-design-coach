@@ -1,4 +1,4 @@
-import type { GradeReport } from "@/lib/types";
+import type { ReadableGradeReport as GradeReport } from "@/lib/legacyContracts";
 import { fmtMs } from "@/lib/time";
 
 const SIGNAL_LABEL: Record<string, { label: string; cls: string }> = {
@@ -56,7 +56,7 @@ export default function ReviewReport({ grade }: { grade: GradeReport }) {
                       key={i}
                       className="rounded bg-neutral-800 px-1.5 py-0.5 text-[11px] text-neutral-400"
                     >
-                      {fmtMs(m.startMs)} · {m.note}
+                      {m.startMs == null ? "—" : fmtMs(m.startMs)} · {m.note}
                     </span>
                   ))}
                 </div>

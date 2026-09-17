@@ -1,7 +1,7 @@
 import "server-only";
 import { newId } from "./ids";
 import { sanitizeTrace } from "./traceContracts";
-import { normalizeLegacyGrade } from "./legacyContracts";
+import { readStoredGrade } from "./legacyContracts";
 import { getDb } from "./database";
 export { closeDb, SNAPSHOT_DIR, RECORDING_DIR } from "./database";
 import type {
@@ -44,6 +44,7 @@ interface RawRow {
 }
 
 function toRow(r: RawRow): SessionRow {
+  const gradeRead = readStoredGrade(r.grade);
   return {
     id: r.id,
     checkpointRevision: r.checkpoint_revision,
@@ -65,7 +66,8 @@ function toRow(r: RawRow): SessionRow {
     finalScene: r.final_scene ? JSON.parse(r.final_scene) : undefined,
     finalImage: r.final_image ?? undefined,
     finalImagePath: r.final_image_path ?? undefined,
-    grade: r.grade ? normalizeLegacyGrade(JSON.parse(r.grade)) : undefined,
+    grade: gradeRead.state === "readable" ? gradeRead.grade : undefined,
+    gradeReadError: gradeRead.state === "unreadable" ? gradeRead.reason : undefined,
     gradeStatus: (r.grading_status ?? "idle") as GradeStatus,
     gradeError: r.grade_error ?? undefined,
   };
@@ -115,7 +117,7 @@ export function listSessionSummaries(limit = 50): SessionSummary[] {
               duration_sec,
               status,
               created_at,
-              json_extract(grade, '$.overall.score') AS score
+              CASE WHEN json_valid(grade) THEN json_extract(grade, '$.overall.score') END AS score
        FROM interview_sessions
        ORDER BY created_at DESC
        LIMIT ?`

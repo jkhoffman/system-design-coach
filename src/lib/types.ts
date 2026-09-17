@@ -1,3 +1,4 @@
+import type { ReadableGradeReport } from "./legacyContracts";
 import type { LiveTraceEvent } from "./liveTrace";
 
 import type { z } from "zod";
@@ -43,7 +44,8 @@ export interface SessionRow {
   finalScene?: unknown;
   finalImage?: string;
   finalImagePath?: string;
-  grade?: GradeReport;
+  grade?: ReadableGradeReport;
+  gradeReadError?: string;
 }
 
 export interface ClientSession {
@@ -60,7 +62,8 @@ export interface ClientSession {
   transcript: TranscriptTurn[];
   timeline: TimelineEvent[];
   finalImageUrl?: string;
-  grade?: GradeReport;
+  grade?: ReadableGradeReport;
+  gradeReadError?: string;
   gradeStatus?: GradeStatus;
   gradeError?: string;
   recordingStatus?: RecordingStatus;

@@ -48,3 +48,23 @@ test("adopts the previous schema with job columns already present", () => {
     assert.equal(db.prepare("PRAGMA user_version").get().user_version, SCHEMA_VERSION);
   } finally { db.close(); }
 });
+
+
+test("migration preserves legacy long evidence and negative times while caching grade readability", async () => {
+  const { gradeReport } = await import("../scripts/mock-fixtures.mjs");
+  const db = new DatabaseSync(":memory:");
+  try {
+    db.exec(legacySchema);
+    const report = gradeReport();
+    report.overall.summary = "long evidence ".repeat(2000);
+    report.dimensions[0].moments = [{ startMs: -10, note: "legacy" }];
+    const raw = JSON.stringify(report);
+    const insert = db.prepare(`INSERT INTO interview_sessions (id, mode, briefing, prompt, duration_sec, status, created_at, grade)
+      VALUES (?, 'library', '{}', '{}', 300, 'graded', 1, ?)`);
+    insert.run("readable", raw); insert.run("broken", "{broken");
+    migrate(db);
+    const readable = db.prepare("SELECT grade, grade_readable FROM interview_sessions WHERE id = 'readable'").get();
+    assert.equal(readable.grade, raw); assert.equal(readable.grade_readable, 1);
+    assert.equal(db.prepare("SELECT grade_readable FROM interview_sessions WHERE id = 'broken'").get().grade_readable, 0);
+  } finally { db.close(); }
+});

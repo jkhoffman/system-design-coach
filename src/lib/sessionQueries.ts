@@ -1,6 +1,6 @@
 import "server-only";
 import { getDb } from "./database";
-import { normalizeLegacyGrade } from "./legacyContracts";
+import { readStoredGrade } from "./legacyContracts";
 import { sanitizeTrace } from "./traceContracts";
 import type { Briefing, ClientSession, PromptSpec, SessionRow } from "./types";
 
@@ -14,6 +14,7 @@ function readClientSession(id: string, includeGrade: boolean): ClientSession | n
     (final_image_path IS NOT NULL OR final_image IS NOT NULL) AS has_image
     FROM interview_sessions WHERE id = ?`).get(id);
   if (!row) return null;
+  const gradeRead = readStoredGrade(row.grade);
   return {
     id, checkpointRevision: Number(row.checkpoint_revision), mode: row.mode as ClientSession["mode"],
     status: row.status as ClientSession["status"], durationSec: Number(row.duration_sec), createdAt: Number(row.created_at),
@@ -21,7 +22,8 @@ function readClientSession(id: string, includeGrade: boolean): ClientSession | n
     briefing: { company: String(row.company ?? ""), position: String(row.position ?? ""), level: String(row.level ?? "") },
     prompt: { id: String(row.prompt_id), title: String(row.title), question: String(row.question) },
     transcript: JSON.parse(String(row.transcript)), timeline: JSON.parse(String(row.timeline)),
-    grade: row.grade ? normalizeLegacyGrade(JSON.parse(String(row.grade))) : undefined,
+    grade: gradeRead.state === "readable" ? gradeRead.grade : undefined,
+    gradeReadError: gradeRead.state === "unreadable" ? gradeRead.reason : undefined,
     gradeStatus: row.grading_status as ClientSession["gradeStatus"], gradeError: row.grade_error == null ? undefined : String(row.grade_error),
     recordingStatus: row.recording_status as ClientSession["recordingStatus"], recordingError: row.recording_error == null ? undefined : String(row.recording_error),
     hasRecording: Boolean(row.has_recording), finalImageUrl: row.has_image ? `/api/sessions/${id}/image` : undefined,
@@ -42,11 +44,13 @@ export function getGradingSession(id: string) {
   if (!setup) return null;
   const row = getDb().prepare(`SELECT started_at, ended_at, transcript, timeline, grade, grading_status, grade_error
     FROM interview_sessions WHERE id = ?`).get(id)!;
+  const gradeRead = readStoredGrade(row.grade);
   return { ...setup, startedAt: row.started_at == null ? undefined : Number(row.started_at),
     endedAt: row.ended_at == null ? undefined : Number(row.ended_at),
     transcript: JSON.parse(String(row.transcript)) as SessionRow["transcript"],
     timeline: JSON.parse(String(row.timeline)) as SessionRow["timeline"],
-    grade: row.grade ? normalizeLegacyGrade(JSON.parse(String(row.grade))) : undefined,
+    grade: gradeRead.state === "readable" ? gradeRead.grade : undefined,
+    gradeReadError: gradeRead.state === "unreadable" ? gradeRead.reason : undefined,
     gradeStatus: row.grading_status as SessionRow["gradeStatus"], gradeError: row.grade_error,
   };
 }

@@ -22,6 +22,7 @@ export function toClientSession(session: SessionRow): ClientSession {
     timeline: session.timeline,
     finalImageUrl: session.finalImage || session.finalImagePath ? `/api/sessions/${session.id}/image` : undefined,
     grade: session.grade,
+    gradeReadError: session.gradeReadError,
     gradeStatus: session.gradeStatus,
     gradeError: session.gradeError,
     recordingStatus: session.recordingStatus,
