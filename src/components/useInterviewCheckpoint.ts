@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { LiveTraceEvent } from "@/lib/liveTrace";
 import type { Timeline } from "@/lib/timeline";
 
@@ -20,10 +20,13 @@ export function useInterviewCheckpoint(input: {
 }) {
   const { sessionId, timeline, t0, ended, liveTrace, active } = input;
   const persistInFlight = useRef(false);
+  const revision = useRef(0);
+  const [checkpointError, setCheckpointError] = useState<string | null>(null);
 
   const progressPayload = useCallback(() => {
     return {
       kind: "progress",
+      revision: ++revision.current,
       transcript: timeline.current.getTranscript(),
       timeline: timeline.current.getEvents(),
       liveTrace: liveTrace(),
@@ -34,13 +37,16 @@ export function useInterviewCheckpoint(input: {
     if (t0.current == null || ended.current || persistInFlight.current) return;
     persistInFlight.current = true;
     try {
-      await fetch(`/api/sessions/${sessionId}`, {
+      const response = await fetch(`/api/sessions/${sessionId}`, {
         method: "PATCH",
+        signal: AbortSignal.timeout(10_000),
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(progressPayload()),
       });
-    } catch {
-      /* checkpointing is best-effort; the next tick retries */
+      if (!response.ok) throw new Error(`Checkpoint failed (${response.status}); retrying…`);
+      setCheckpointError(null);
+    } catch (error) {
+      if (!ended.current) setCheckpointError(error instanceof Error ? error.message : "Checkpoint failed; retrying…");
     } finally {
       persistInFlight.current = false;
     }
@@ -67,4 +73,5 @@ export function useInterviewCheckpoint(input: {
     const iv = setInterval(() => void saveProgress(), CHECKPOINT_MS);
     return () => clearInterval(iv);
   }, [active, saveProgress]);
+  return { checkpointError };
 }

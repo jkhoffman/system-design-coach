@@ -1,4 +1,5 @@
-import { getSession, markRecordingUnavailable, updateSession } from "@/lib/db";
+import { getSession } from "@/lib/db";
+import { reserveSessionStart, releaseSessionStart, completeSessionStart, START_TIMEOUT_MS } from "@/lib/sessionCommands";
 import { errorResponse, readJsonBody } from "@/lib/http";
 import { buildSessionConfig } from "@/lib/persona";
 import { LiveSessionRequestSchema } from "@/lib/schemas";
@@ -13,13 +14,16 @@ export async function POST(request: Request) {
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "OPENAI_API_KEY not set" }, { status: 503 });
   }
+  let reservation: { id: string; token: string } | undefined;
   try {
     const body = LiveSessionRequestSchema.parse(await readJsonBody(request, 256 * 1024));
     const row = getSession(body.sessionId);
     if (!row) return Response.json({ error: "unknown sessionId" }, { status: 404 });
-    if (row.status !== "created" && row.status !== "live") {
-      return Response.json({ error: "session has already ended" }, { status: 409 });
-    }
+    const token = reserveSessionStart(row.id);
+    if (!token) return Response.json({ error: "session already started or connection in progress" }, { status: 409 });
+    reservation = { id: row.id, token };
+    const signal = AbortSignal.any([request.signal, AbortSignal.timeout(START_TIMEOUT_MS)]);
+    let storageAllowed = true;
 
     const session = buildSessionConfig({
       briefing: row.briefing,
@@ -30,6 +34,7 @@ export async function POST(request: Request) {
     const create = (cfg: Record<string, unknown>) =>
       fetch(openAiUrl("/live/sessions"), {
         method: "POST",
+        signal,
         headers: {
           Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
           "Content-Type": "application/json",
@@ -46,7 +51,7 @@ export async function POST(request: Request) {
         const noStore: Record<string, unknown> = { ...session };
         delete noStore.store;
         res = await create(noStore);
-        markRecordingUnavailable(row.id, "session storage not permitted on project");
+        storageAllowed = false;
       } else {
         return Response.json(
           { error: `OpenAI live session failed: ${res.status}`, detail: errText },
@@ -71,15 +76,14 @@ export async function POST(request: Request) {
     };
     const answer = data.transport?.sdp ?? data.sdp;
     const liveSessionId = data.id ?? data.session?.id;
-    if (!answer) {
-      return Response.json({ error: "no SDP answer from OpenAI", detail: data }, { status: 502 });
+    if (!answer || !liveSessionId) {
+      return Response.json({ error: "incomplete session answer from OpenAI", detail: data }, { status: 502 });
     }
 
-    updateSession(row.id, {
-      status: "live",
-      startedAt: Date.now(),
-      liveSessionId,
-    });
+    signal.throwIfAborted();
+    if (!completeSessionStart(row.id, token, liveSessionId!, storageAllowed)) {
+      return Response.json({ error: "connection attempt expired or superseded" }, { status: 409 });
+    }
 
     return Response.json({
       sdp: answer,
@@ -88,5 +92,7 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     return errorResponse(error);
+  } finally {
+    if (reservation) releaseSessionStart(reservation.id, reservation.token);
   }
 }

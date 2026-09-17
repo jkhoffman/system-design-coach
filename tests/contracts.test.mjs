@@ -5,14 +5,14 @@ import { sampleTrace } from "./fixtures.mjs";
 
 test("contracts", () => {
   assert.equal(
-    SessionPatchSchema.parse({ kind: "progress", transcript: [], timeline: [], liveTrace: sampleTrace })
+    SessionPatchSchema.parse({ kind: "progress", revision: 1, transcript: [], timeline: [], liveTrace: sampleTrace })
       .liveTrace.length,
     sampleTrace.length
   );
   
   assert.throws(() =>
     SessionPatchSchema.parse({
-      kind: "progress",
+      kind: "progress", revision: 1,
       transcript: [],
       timeline: [{ kind: "snapshot", startMs: 0, label: "bad", file: "../outside.png" }],
     })

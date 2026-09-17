@@ -122,7 +122,7 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
     []
   );
 
-  useInterviewCheckpoint({
+  const { checkpointError } = useInterviewCheckpoint({
     sessionId: session.id,
     timeline,
     t0,
@@ -388,6 +388,9 @@ export default function InterviewRoom({ session }: { session: ClientSession }) {
         </div>
       </header>
 
+      {checkpointError && phase === "live" && (
+        <p role="status" className="bg-amber-950 px-4 py-2 text-sm text-amber-200">{checkpointError}</p>
+      )}
       {showPrompt && (
         <div className="border-b border-neutral-800 bg-neutral-900 px-4 py-2 text-sm text-neutral-300">
           {session.prompt.question}

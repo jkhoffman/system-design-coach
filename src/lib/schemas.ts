@@ -102,6 +102,7 @@ export const LiveTraceSchema = z.array(LiveTraceEventSchema).max(20_000);
 export const SessionPatchSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("progress"),
+    revision: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
     transcript: z.array(TranscriptTurnSchema).max(20_000),
     timeline: z.array(TimelineEventSchema).max(50_000),
     liveTrace: LiveTraceSchema.optional(),

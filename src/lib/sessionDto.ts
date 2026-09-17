@@ -4,6 +4,7 @@ import type { ClientSession, SessionRow } from "./types";
 export function toClientSession(session: SessionRow): ClientSession {
   return {
     id: session.id,
+    checkpointRevision: session.checkpointRevision,
     mode: session.mode,
     briefing: {
       company: session.briefing.company,

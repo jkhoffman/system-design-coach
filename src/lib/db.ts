@@ -1,7 +1,7 @@
-import { DatabaseSync } from "node:sqlite";
-import fs from "node:fs";
-import path from "node:path";
+import "server-only";
 import crypto from "node:crypto";
+import { getDb } from "./database";
+export { closeDb, SNAPSHOT_DIR, RECORDING_DIR } from "./database";
 import type {
   SessionRow,
   Briefing,
@@ -15,89 +15,8 @@ import type {
   SessionSummary,
 } from "./types";
 
-const DATA_DIR = process.env.APP_DATA_DIR
-  ? path.resolve(process.env.APP_DATA_DIR)
-  : path.join(process.cwd(), "data");
-export const SNAPSHOT_DIR = path.join(DATA_DIR, "snapshots");
-export const RECORDING_DIR = path.join(DATA_DIR, "recordings");
-
 const GRADING_CLAIM_STALE_MS = 3 * 60 * 1000;
 const RECORDING_CLAIM_STALE_MS = 2 * 60 * 1000;
-const SCHEMA_VERSION = 3;
-
-function ensureDirs() {
-  for (const d of [DATA_DIR, SNAPSHOT_DIR, RECORDING_DIR]) {
-    fs.mkdirSync(d, { recursive: true });
-  }
-}
-
-function addColumn(db: DatabaseSync, sql: string): void {
-  try {
-    db.exec(sql);
-  } catch (err) {
-    if (!String(err).includes("duplicate column name")) throw err;
-  }
-}
-
-function ensureSchema(db: DatabaseSync): void {
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA busy_timeout = 5000");
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS interview_sessions (
-      id TEXT PRIMARY KEY,
-      mode TEXT NOT NULL,
-      briefing TEXT NOT NULL,
-      prompt TEXT NOT NULL,
-      duration_sec INTEGER NOT NULL,
-      status TEXT NOT NULL DEFAULT 'created',
-      created_at INTEGER NOT NULL,
-      started_at INTEGER,
-      ended_at INTEGER,
-      live_session_id TEXT,
-      recording_path TEXT,
-      transcript TEXT NOT NULL DEFAULT '[]',
-      timeline TEXT NOT NULL DEFAULT '[]',
-      live_trace TEXT NOT NULL DEFAULT '[]',
-      final_scene TEXT,
-      final_image TEXT,
-      grade TEXT,
-      grading_status TEXT NOT NULL DEFAULT 'idle',
-      grading_started_at INTEGER,
-      grade_error TEXT,
-      recording_status TEXT NOT NULL DEFAULT 'idle',
-      recording_started_at INTEGER,
-      recording_error TEXT
-    )
-  `);
-  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN grading_status TEXT NOT NULL DEFAULT 'idle'");
-  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN grading_started_at INTEGER");
-  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN grade_error TEXT");
-  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN recording_status TEXT NOT NULL DEFAULT 'idle'");
-  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN recording_started_at INTEGER");
-  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN recording_error TEXT");
-  addColumn(db, "ALTER TABLE interview_sessions ADD COLUMN live_trace TEXT NOT NULL DEFAULT '[]'");
-  db.exec(`
-    UPDATE interview_sessions SET grading_status = 'done' WHERE grade IS NOT NULL AND grading_status = 'idle';
-    UPDATE interview_sessions SET recording_status = 'done' WHERE recording_path IS NOT NULL AND recording_path != '' AND recording_status = 'idle';
-    UPDATE interview_sessions SET recording_status = 'unavailable' WHERE recording_path = '' AND recording_status = 'idle';
-  `);
-}
-
-const g = globalThis as unknown as { __appdb?: DatabaseSync; __appdbSchemaVersion?: number };
-
-// Lazy open so build-time module collection never touches the database file.
-function getDb(): DatabaseSync {
-  if (!g.__appdb) {
-    ensureDirs();
-    g.__appdb = new DatabaseSync(path.join(DATA_DIR, "app.db"));
-  }
-  // A Next dev server can retain the old connection across hot reloads.
-  if (g.__appdbSchemaVersion !== SCHEMA_VERSION) {
-    ensureSchema(g.__appdb);
-    g.__appdbSchemaVersion = SCHEMA_VERSION;
-  }
-  return g.__appdb;
-}
 
 export function newId(): string {
   return crypto.randomBytes(8).toString("hex");
@@ -125,11 +44,13 @@ interface RawRow {
   grade: string | null;
   grading_status: string | null;
   grade_error: string | null;
+  checkpoint_revision: number;
 }
 
 function toRow(r: RawRow): SessionRow {
   return {
     id: r.id,
+    checkpointRevision: r.checkpoint_revision,
     mode: r.mode as Mode,
     briefing: JSON.parse(r.briefing) as Briefing,
     prompt: JSON.parse(r.prompt) as PromptSpec,

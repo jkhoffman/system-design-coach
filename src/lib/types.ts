@@ -47,6 +47,7 @@ export type TimelineEvent =
 
 export interface SessionRow {
   id: string;
+  checkpointRevision: number;
   mode: Mode;
   briefing: Briefing;
   prompt: PromptSpec;
@@ -88,6 +89,7 @@ export interface TradeoffAuditEntry {
 
 export interface ClientSession {
   id: string;
+  checkpointRevision: number;
   mode: Mode;
   briefing: Omit<Briefing, "jobDescription">;
   prompt: Omit<PromptSpec, "factSheet">;
