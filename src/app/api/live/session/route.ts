@@ -1,4 +1,4 @@
-import { getSession } from "@/lib/db";
+import { getLiveSetup } from "@/lib/sessionQueries";
 import { reserveSessionStart, releaseSessionStart, completeSessionStart, START_TIMEOUT_MS } from "@/lib/sessionCommands";
 import { errorResponse, readJsonBody } from "@/lib/http";
 import { buildSessionConfig } from "@/lib/persona";
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
   let reservation: { id: string; token: string } | undefined;
   try {
     const body = LiveSessionRequestSchema.parse(await readJsonBody(request, 256 * 1024));
-    const row = getSession(body.sessionId);
+    const row = getLiveSetup(body.sessionId);
     if (!row) return Response.json({ error: "unknown sessionId" }, { status: 404 });
     const token = reserveSessionStart(row.id);
     if (!token) return Response.json({ error: "session already started or connection in progress" }, { status: 409 });

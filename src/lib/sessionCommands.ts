@@ -55,6 +55,7 @@ export type FinishInput = InterviewContent & {
   endedAt: number;
   finalScene?: unknown;
   finalImage?: string | null;
+  finalImagePath?: string | null;
 };
 
 /** First finish wins; every retry observes the same immutable interview content. */
@@ -66,12 +67,14 @@ export function finishSession(id: string, input: FinishInput): "saved" | "alread
   if (input.endedAt > Date.now() + 60_000 || (row.started_at && input.endedAt < Number(row.started_at))) return "invalid_time";
   const result = getDb().prepare(`UPDATE interview_sessions
     SET status = 'ended', ended_at = ?, transcript = ?, timeline = ?, live_trace = COALESCE(?, live_trace),
-        final_scene = COALESCE(?, final_scene), final_image = CASE WHEN ? THEN ? ELSE final_image END
+        final_scene = COALESCE(?, final_scene), final_image = CASE WHEN ? THEN ? ELSE final_image END,
+        final_image_path = CASE WHEN ? THEN ? ELSE final_image_path END
     WHERE id = ? AND status = 'live'`)
     .run(input.endedAt, JSON.stringify(input.transcript), JSON.stringify(input.timeline),
       input.liveTrace === undefined ? null : JSON.stringify(input.liveTrace),
       input.finalScene === undefined ? null : JSON.stringify(input.finalScene),
-      input.finalImage !== undefined ? 1 : 0, input.finalImage ?? null, id);
+      input.finalImage !== undefined ? 1 : 0, input.finalImage ?? null,
+      input.finalImagePath !== undefined ? 1 : 0, input.finalImagePath ?? null, id);
   if (result.changes) return "saved";
   return "already_finished";
 }

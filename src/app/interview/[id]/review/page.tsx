@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getSession } from "@/lib/db";
-import { toClientSession } from "@/lib/sessionDto";
+import { getReviewSession } from "@/lib/sessionQueries";
 import { validSessionId } from "@/lib/schemas";
 import ReviewReport from "@/components/ReviewReport";
 import ReplayScrubber from "@/components/ReplayScrubber";
@@ -12,9 +11,9 @@ export const dynamic = "force-dynamic";
 export default async function ReviewPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   if (!validSessionId(id)) notFound();
-  const session = getSession(id);
+  const session = getReviewSession(id);
   if (!session) notFound();
-  const clientSession = toClientSession(session);
+  const clientSession = session;
 
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
@@ -50,12 +49,12 @@ export default async function ReviewPage({ params }: { params: Promise<{ id: str
         <ReplayScrubber session={clientSession} />
       </section>
 
-      {session.finalImage && (
+      {session.finalImageUrl && (
         <section className="mt-8">
           <h3 className="mb-3 font-semibold">Final whiteboard</h3>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src={session.finalImage}
+            src={session.finalImageUrl}
             alt="Final whiteboard"
             className="max-w-full rounded-xl border border-neutral-800"
           />

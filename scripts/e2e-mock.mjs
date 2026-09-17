@@ -196,7 +196,10 @@ async function runHappyPath(context, baseUrl, mock, pageErrors) {
   assert.equal(finished.grade?.overall?.score, 4);
   assert.equal(finished.grade?.dimensions?.length, 6);
   assert.ok(finished.endedAt, "endedAt was not persisted");
-  assert.ok(finished.finalImage?.startsWith("data:image/png"), "final image was not persisted");
+  assert.ok(finished.finalImageUrl, "final image was not persisted");
+  const finalImage = await fetch(`${baseUrl}${finished.finalImageUrl}`);
+  assert.equal(finalImage.headers.get("content-type"), "image/png");
+  assert.ok((await finalImage.arrayBuffer()).byteLength > 8, "final image is empty");
   assert.ok(finished.transcript.some((turn) => turn.speaker === "interviewer"));
   assert.ok(finished.transcript.some((turn) => turn.speaker === "candidate"));
   assert.ok(finished.timeline.some((event) => event.kind === "marker"));

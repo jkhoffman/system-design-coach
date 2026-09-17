@@ -42,6 +42,7 @@ export interface SessionRow {
   liveTrace?: LiveTraceEvent[];
   finalScene?: unknown;
   finalImage?: string;
+  finalImagePath?: string;
   grade?: GradeReport;
 }
 
@@ -58,7 +59,7 @@ export interface ClientSession {
   endedAt?: number;
   transcript: TranscriptTurn[];
   timeline: TimelineEvent[];
-  finalImage?: string;
+  finalImageUrl?: string;
   grade?: GradeReport;
   gradeStatus?: GradeStatus;
   gradeError?: string;

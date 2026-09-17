@@ -20,7 +20,7 @@ export function toClientSession(session: SessionRow): ClientSession {
     endedAt: session.endedAt,
     transcript: session.transcript,
     timeline: session.timeline,
-    finalImage: session.finalImage,
+    finalImageUrl: session.finalImage || session.finalImagePath ? `/api/sessions/${session.id}/image` : undefined,
     grade: session.grade,
     gradeStatus: session.gradeStatus,
     gradeError: session.gradeError,

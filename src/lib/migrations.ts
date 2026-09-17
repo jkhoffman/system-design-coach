@@ -40,6 +40,7 @@ const migrations: ((db: DatabaseSync) => void)[] = [
   (db) => db.exec(`CREATE TABLE generated_prompts (
     id TEXT PRIMARY KEY, spec TEXT NOT NULL, created_at INTEGER NOT NULL
   )`),
+  (db) => db.exec("ALTER TABLE interview_sessions ADD COLUMN final_image_path TEXT"),
 ];
 
 export const SCHEMA_VERSION = migrations.length;

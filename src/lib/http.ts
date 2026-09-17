@@ -1,16 +1,29 @@
 import { ZodError } from "zod";
-import { MAX_JSON_BODY_BYTES } from "./schemas";
 
-export async function readJsonBody(request: Request, maxBytes = MAX_JSON_BODY_BYTES): Promise<unknown> {
-  const text = await request.text();
-  if (Buffer.byteLength(text) > maxBytes) {
+
+export async function readJsonBody(request: Request, maxBytes = 128 * 1024): Promise<unknown> {
+  if (Number(request.headers.get("content-length")) > maxBytes) {
+    await request.body?.cancel();
     throw new HttpError(413, "request body too large");
   }
+  const reader = request.body?.getReader();
+  if (!reader) throw new HttpError(400, "invalid JSON body");
+  const chunks: Uint8Array[] = [];
+  let size = 0;
   try {
-    return JSON.parse(text) as unknown;
-  } catch {
-    throw new HttpError(400, "invalid JSON body");
-  }
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        await reader.cancel();
+        throw new HttpError(413, "request body too large");
+      }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  try { return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown; }
+  catch { throw new HttpError(400, "invalid JSON body"); }
 }
 
 export class HttpError extends Error {

@@ -41,6 +41,7 @@ interface RawRow {
   live_trace: string | null;
   final_scene: string | null;
   final_image: string | null;
+  final_image_path: string | null;
   grade: string | null;
   grading_status: string | null;
   grade_error: string | null;
@@ -68,6 +69,7 @@ function toRow(r: RawRow): SessionRow {
     liveTrace: r.live_trace ? (sanitizeTrace(JSON.parse(r.live_trace)) ?? []) : [],
     finalScene: r.final_scene ? JSON.parse(r.final_scene) : undefined,
     finalImage: r.final_image ?? undefined,
+    finalImagePath: r.final_image_path ?? undefined,
     grade: r.grade ? normalizeLegacyGrade(JSON.parse(r.grade)) : undefined,
     gradeStatus: (r.grading_status ?? "idle") as GradeStatus,
     gradeError: r.grade_error ?? undefined,

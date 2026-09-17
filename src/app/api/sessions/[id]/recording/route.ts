@@ -1,34 +1,21 @@
-import fs from "node:fs";
-import path from "node:path";
-import { Readable } from "node:stream";
-import {
-  getSession,
-  RECORDING_DIR,
-} from "@/lib/db";
-import { claimJob, failJob, finishRecording, resetMissingRecording, JOB_TIMING } from "@/lib/sessionJobs";
+import { getRecordingSession } from "@/lib/sessionQueries";
+import { availableRecording, publishRecording, serveRecording } from "@/lib/artifacts";
+import { claimJob, failJob, JOB_TIMING } from "@/lib/sessionJobs";
 import { validSessionId } from "@/lib/schemas";
 import { openAiUrl } from "@/lib/openai";
+import { delay } from "@/lib/async";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
-
-function recordingFile(id: string): string {
-  return path.resolve(RECORDING_DIR, `${id}.wav`);
-}
-
-function recordingStatusResponse(row: ReturnType<typeof getSession>, extra: Record<string, unknown> = {}) {
-  return Response.json({
-    status: row?.recordingStatus ?? "idle",
-    error: row?.recordingError,
-    ...extra,
-  });
+function recordingStatusResponse(row: ReturnType<typeof getRecordingSession>, extra: Record<string, unknown> = {}) {
+  return Response.json({ status: row?.recordingStatus ?? "idle", error: row?.recordingError, ...extra });
 }
 
 /** Download the stored GPT-Live recording (stereo WAV) for this session. */
 export async function POST(_request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
   if (!validSessionId(id)) return Response.json({ error: "not found" }, { status: 404 });
-  let row = getSession(id);
+  let row = getRecordingSession(id);
   if (!row) return Response.json({ error: "not found" }, { status: 404 });
   if (row.status !== "ended" && row.status !== "graded") {
     return Response.json({ error: "session has not ended" }, { status: 409 });
@@ -40,19 +27,16 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   if (row.recordingPath === "" || row.recordingStatus === "unavailable") {
     return Response.json({ error: "session storage not permitted on project" }, { status: 400 });
   }
-  if (row.recordingPath && fs.existsSync(/* turbopackIgnore: true */ row.recordingPath)) {
+  if (await availableRecording(id)) {
     return recordingStatusResponse(row, { ok: true });
   }
-  if (row.recordingPath) {
-    resetMissingRecording(id, row.recordingPath);
-    row = getSession(id)!;
-  }
+  row = getRecordingSession(id)!;
   if (!process.env.OPENAI_API_KEY) {
     return Response.json({ error: "OPENAI_API_KEY not set" }, { status: 503 });
   }
   const attempt = claimJob(id, "recording");
   if (!attempt) {
-    return recordingStatusResponse(getSession(id), { ok: false });
+    return recordingStatusResponse(getRecordingSession(id), { ok: false });
   }
 
   try {
@@ -67,18 +51,13 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
       });
       if (res.ok) break;
       lastErr = await res.text();
-      if (retry < 3) await new Promise((r) => setTimeout(r, 2500));
+      if (retry < 3) await delay(2500, signal);
     }
     if (!res?.ok) {
       throw new Error(`recording fetch failed: ${res?.status ?? "network error"} ${lastErr}`.trim());
     }
-    const file = path.resolve(RECORDING_DIR, `${id}-${attempt.token}.wav`);
-    fs.writeFileSync(/* turbopackIgnore: true */ file, Buffer.from(await res.arrayBuffer()));
-    if (!finishRecording(attempt, file)) {
-      fs.rmSync(file, { force: true });
-      throw new Error("recording attempt expired or superseded");
-    }
-    return recordingStatusResponse(getSession(id), { ok: true });
+    await publishRecording(res, attempt, signal);
+    return recordingStatusResponse(getRecordingSession(id), { ok: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     failJob(attempt, message);
@@ -86,49 +65,9 @@ export async function POST(_request: Request, ctx: { params: Promise<{ id: strin
   }
 }
 
-/** Serve the WAV if downloaded, with byte-range support for audio seeking. */
 export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
-  if (!validSessionId(id)) return Response.json({ error: "not found" }, { status: 404 });
-  const row = getSession(id);
-  if (!row) return Response.json({ error: "not found" }, { status: 404 });
-  const file = row.recordingPath ? path.resolve(row.recordingPath) : recordingFile(id);
-  const root = path.resolve(RECORDING_DIR);
-  if (
-    row.recordingPath === "" ||
-    !file.startsWith(root + path.sep) ||
-    !fs.existsSync(/* turbopackIgnore: true */ file)
-  ) {
-    return Response.json({ error: "no recording" }, { status: 404 });
-  }
-  const stat = fs.statSync(/* turbopackIgnore: true */ file);
-  const range = request.headers.get("range");
-  const headers: Record<string, string> = {
-    "Content-Type": "audio/wav",
-    "Accept-Ranges": "bytes",
-  };
-  if (range) {
-    const match = /^bytes=(\d+)-(\d*)$/.exec(range);
-    if (!match) {
-      return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${stat.size}` } });
-    }
-    const start = Number(match[1]);
-    const end = match[2] ? Math.min(Number(match[2]), stat.size - 1) : stat.size - 1;
-    if (!Number.isSafeInteger(start) || start >= stat.size || end < start) {
-      return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${stat.size}` } });
-    }
-    const stream = Readable.toWeb(fs.createReadStream(file, { start, end })) as ReadableStream;
-    return new Response(stream, {
-      status: 206,
-      headers: {
-        ...headers,
-        "Content-Range": `bytes ${start}-${end}/${stat.size}`,
-        "Content-Length": String(end - start + 1),
-      },
-    });
-  }
-  const stream = Readable.toWeb(fs.createReadStream(file)) as ReadableStream;
-  return new Response(stream, {
-    headers: { ...headers, "Content-Length": String(stat.size) },
-  });
+  const file = validSessionId(id) ? await availableRecording(id) : null;
+  if (!file) return Response.json({ error: "no recording" }, { status: 404 });
+  return serveRecording(file, request);
 }
