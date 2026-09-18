@@ -190,7 +190,8 @@ async function main() {
   if (args.has("--fail-after-capture")) throw new Error("Injected failure after capture");
   const gif = path.join(artifacts, "demo.gif");
   await run("ffmpeg", ["-y", "-v", "error", "-ss", String((captureStart - videoStart) / 1000), "-i", path.join(artifacts, "demo.webm"), "-t", String(durationSec),
-    "-filter_complex", "fps=12,scale=960:600:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=3:diff_mode=rectangle", "-loop", "0", gif]);
+    // A full palette without dithering preserves flat UI backgrounds and avoids noisy, oversized frames.
+    "-filter_complex", "fps=12,scale=960:600:flags=lanczos,split[a][b];[a]palettegen=stats_mode=full[p];[b][p]paletteuse=dither=none:diff_mode=rectangle", "-loop", "0", gif]);
   const { stdout } = await run("ffprobe", ["-v", "error", "-show_entries", "stream=width,height:format=duration,size", "-of", "json", gif]);
   const probe = JSON.parse(stdout);
   assert.equal(probe.streams[0].width, 960);
