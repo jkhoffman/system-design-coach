@@ -1,54 +1,12 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { spawn } from "node:child_process";
 import { chromium } from "playwright";
 import { installLiveBrowserStub } from "./live-browser-stub.mjs";
-import { startMockOpenAI } from "./mock-openai.mjs";
+import { startMockApp, waitFor } from "./mock-app.mjs";
 
 const ROOT = process.cwd();
-const NEXT_BIN = path.join(ROOT, "node_modules", "next", "dist", "bin", "next");
-
-async function freePort() {
-  const server = net.createServer();
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
-  assert.ok(port > 0, "could not allocate an app port");
-  return port;
-}
-
-async function waitFor(check, description, timeoutMs = 90_000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const value = await check();
-      if (value) return value;
-    } catch (error) {
-      lastError = error;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-  throw new Error(`timed out waiting for ${description}${lastError ? `: ${lastError}` : ""}`);
-}
-
-async function stopProcess(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  child.kill("SIGTERM");
-  const exited = await Promise.race([
-    new Promise((resolve) => child.once("exit", () => resolve(true))),
-    new Promise((resolve) => setTimeout(() => resolve(false), 5_000)),
-  ]);
-  if (!exited) child.kill("SIGKILL");
-}
 
 async function createSession(baseUrl) {
   const response = await fetch(`${baseUrl}/api/sessions`, {
@@ -599,51 +557,10 @@ async function assertPublicPromptBoundary(baseUrl) {
 }
 
 async function main() {
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "interview-e2e-data-"));
-  const mock = await startMockOpenAI();
-  const appPort = await freePort();
-  const appUrl = `http://127.0.0.1:${appPort}`;
-  const appOutput = [];
-  const app = spawn(
-    process.execPath,
-    [NEXT_BIN, "start", "--hostname", "127.0.0.1", "-p", String(appPort)],
-    {
-      cwd: ROOT,
-      env: {
-        ...process.env,
-        APP_DATA_DIR: dataDir,
-        OPENAI_API_KEY: "mock-key",
-        OPENAI_BASE_URL: mock.baseUrl,
-        GRADING_MODEL: "mock-grader",
-        LIVE_MODEL: "mock-live",
-        LIVE_BACKEND_MODEL: "mock-backend",
-        PROMPT_GEN_MODEL: "mock-prompt-gen",
-        IMAGE_PUSH_MODE: "on",
-        NEXT_TELEMETRY_DISABLED: "1",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-    }
-  );
-  const capture = (chunk) => {
-    appOutput.push(String(chunk));
-    if (appOutput.join("").length > 50_000) appOutput.splice(0, appOutput.length - 20);
-  };
-  app.stdout.on("data", capture);
-  app.stderr.on("data", capture);
-  app.once("exit", (code, signal) => {
-    appOutput.push(`\n[next exited code=${code} signal=${signal}]\n`);
-  });
-
+  const environment = await startMockApp();
+  const { dataDir, mock, appUrl, appOutput } = environment;
   let browser;
   try {
-    await waitFor(async () => {
-      if (app.exitCode !== null) {
-        throw new Error(`Next server exited early\n${appOutput.join("")}`);
-      }
-      const response = await fetch(`${appUrl}/api/sessions`);
-      return response.ok;
-    }, "Next production server");
-
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext();
     await context.addInitScript(installLiveBrowserStub);
@@ -671,9 +588,7 @@ async function main() {
     throw error;
   } finally {
     if (browser) await browser.close().catch(() => {});
-    await stopProcess(app);
-    await mock.close().catch(() => {});
-    fs.rmSync(dataDir, { recursive: true, force: true });
+    await environment.close();
   }
 }
 

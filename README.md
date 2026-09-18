@@ -11,6 +11,12 @@ board timeline.
 
 ![Mock system design interview demo](docs/demo.gif)
 
+This walkthrough uses simulated interview responses and grading. It is refreshed
+automatically in a reviewable pull request after relevant changes reach `main`.
+To record it locally, install Playwright Chromium and FFmpeg, then run
+`npm run demo:record`. See [Recording the demo](docs/demo-recording.md) for setup,
+the walkthrough scenes, and failure diagnostics.
+
 ## How it works
 
 - **Voice**: `gpt-live-1` over WebRTC. The browser sends an SDP offer to

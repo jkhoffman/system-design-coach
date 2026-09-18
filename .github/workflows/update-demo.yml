@@ -1,0 +1,104 @@
+name: Update README demo
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'public/**'
+      - 'scripts/record-demo.mjs'
+      - 'scripts/demo-*.mjs'
+      - 'scripts/check-demo-failure.mjs'
+      - 'scripts/mock-*.mjs'
+      - 'scripts/live-browser-stub.mjs'
+      - 'scripts/register-source.mjs'
+      - 'scripts/e2e-mock.mjs'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'next.config.*'
+      - 'postcss.config.*'
+      - 'tsconfig.json'
+      - '.github/workflows/update-demo.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: update-readme-demo
+  cancel-in-progress: true
+
+jobs:
+  record:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Install recording tools
+        run: |
+          npx playwright install --with-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - name: Build and run mock browser suite
+        run: npm run test:e2e:mock
+      - name: Verify failed captures preserve the published GIF
+        run: npm run demo:check-failure
+      - name: Record and validate walkthrough
+        run: npm run demo:record -- --skip-build
+      - name: Prepare preview and provenance
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const { durationSec, bytes } = JSON.parse(fs.readFileSync('artifacts/demo/metadata.json', 'utf8'));
+          const { GITHUB_REPOSITORY: repo, GITHUB_SHA: sha, GITHUB_RUN_ID: run } = process.env;
+          const body = [
+            'Refresh the README walkthrough to show the current application.',
+            '',
+            `![Simulated interview demo](https://raw.githubusercontent.com/${repo}/codex/update-demo/docs/demo.gif?source=${sha})`,
+            '',
+            `Recorded from [${sha.slice(0, 7)}](https://github.com/${repo}/commit/${sha}).`,
+            `Duration: ${durationSec.toFixed(1)} seconds · Size: ${(bytes / 1024 / 1024).toFixed(2)} MiB · 960×600 at 12 fps.`,
+            '',
+            'Uses synthetic interview data and the local provider mock; no paid API calls.',
+            'Passed lint, type checking, deterministic tests, mock browser tests, failure cleanup, and GIF validation.',
+            '',
+            `[Workflow run and recording artifacts](https://github.com/${repo}/actions/runs/${run})`,
+            '',
+            'Please review the animation before merging. This PR changes only the generated GIF.',
+          ].join('\n');
+          fs.writeFileSync('artifacts/demo/pull-request.md', body + '\n');
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, body + '\n');
+          JS
+      - name: Create or update demo PR
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: codex/update-demo
+          base: main
+          add-paths: docs/demo.gif
+          commit-message: 'docs: refresh automated interview demo'
+          title: 'docs: refresh automated interview demo'
+          body-path: artifacts/demo/pull-request.md
+      - name: Keep recording and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: readme-demo-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/demo/
+          if-no-files-found: ignore
+          retention-days: 14

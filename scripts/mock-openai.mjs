@@ -28,11 +28,11 @@ function json(response, status, body) {
   response.end(text);
 }
 
-function wavBytes() {
+function wavBytes(durationSec = 0.5) {
   const sampleRate = 8000;
   const channels = 2;
   const bytesPerSample = 2;
-  const frames = sampleRate / 2;
+  const frames = Math.round(sampleRate * durationSec);
   const dataSize = frames * channels * bytesPerSample;
   const buffer = Buffer.alloc(44 + dataSize);
   buffer.write("RIFF", 0);
@@ -93,7 +93,7 @@ function openAiResponse(body, output) {
   };
 }
 
-export async function startMockOpenAI({ host = "127.0.0.1", port = 0, apiKey = "mock-key" } = {}) {
+export async function startMockOpenAI({ host = "127.0.0.1", port = 0, apiKey = "mock-key", grade = gradeReport(), recordingDurationSec = 0.5 } = {}) {
   const counts = {
     liveCreate: 0,
     liveHangup: 0,
@@ -103,7 +103,7 @@ export async function startMockOpenAI({ host = "127.0.0.1", port = 0, apiKey = "
     promptResponses: 0,
   };
   const liveSessions = new Map();
-  const wav = wavBytes();
+  const wav = wavBytes(recordingDurationSec);
   let nextLiveId = 1;
 
   const server = http.createServer(async (request, response) => {
@@ -163,7 +163,7 @@ export async function startMockOpenAI({ host = "127.0.0.1", port = 0, apiKey = "
         const schemaName = body?.text?.format?.name;
         if (schemaName === "grade_report") {
           counts.gradeResponses++;
-          json(response, 200, openAiResponse(body, gradeReport()));
+          json(response, 200, openAiResponse(body, grade));
           return;
         }
         if (schemaName === "prompt_spec") {

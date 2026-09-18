@@ -140,11 +140,11 @@ export function installLiveBrowserStub(options = {}) {
         setTimeout(() => {
           this.emitTranscript(
             "candidate",
-            "I will scope reads, writes, and durability first, then draw the core flow. ",
+            options.candidateText ?? "I will scope reads, writes, and durability first, then draw the core flow. ",
             2400,
             4300
           );
-        }, 50);
+        }, options.candidateDelayMs ?? 50);
         return;
       }
 
@@ -196,7 +196,7 @@ export function installLiveBrowserStub(options = {}) {
           this.emit({ type: "response.completed" });
           this.emitTranscript(
             "interviewer",
-            "I can see the client feeding the API layer; tell me how the write path handles duplicates.",
+            options.boardResponse ?? "I can see the client feeding the API layer; tell me how the write path handles duplicates.",
             6500,
             8300
           );

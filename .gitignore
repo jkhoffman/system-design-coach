@@ -12,6 +12,8 @@
 
 # testing
 /coverage
+/artifacts/
+/docs/.demo.pending.gif
 
 # next.js
 /.next/
