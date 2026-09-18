@@ -89,7 +89,22 @@ job leases, transport cancellation, schema validation, diagnostics, stream limit
 media publication, pacing, timeline ordering, and scene summaries. Each database
 fixture and browser run closes its connections and removes its temporary data.
 
-The live debug smoke uses the real API. It records data-channel message order and byte sizes, verifies `response.completed` and `session.closed` arrive before teardown, draws a visual-only code, asserts the delegated backend reads that code from the image, and polls recording/grading to completion.
+The live smoke requires a running app server configured with an OpenAI key. It uses
+synthetic microphone input, waits for interviewer speech, saves a board checkpoint,
+ends the interview, and asserts provider close, media teardown, grading, and recording
+seek/playback. It creates a saved interview in that server's data directory; use an
+isolated `APP_DATA_DIR` when starting the server to keep test data separate.
+
+```bash
+APP_URL=http://127.0.0.1:3000 SMOKE_STARTUP_RETRY=1 npm run smoke:live
+```
+
+`APP_URL` defaults to `http://127.0.0.1:3000`. `SMOKE_STARTUP_RETRY=1` additionally
+fails the first browser SDP application and verifies Join succeeds on retry; this
+creates a second billable provider session. The script fails on missing speech,
+failed jobs, or unusable audio, and attempts provider cleanup after failure.
+
+The live debug smoke also uses the real API. It records data-channel message order and byte sizes, verifies `response.completed` and `session.closed` arrive before teardown, draws a visual-only code, asserts the delegated backend reads that code from the image, and polls recording/grading to completion.
 
 ## Live diagnostics
 
@@ -201,11 +216,12 @@ Live schema acceptance is separate from mock validation. To make two billable re
 using synthetic inputs and the configured `PROMPT_GEN_MODEL` and `GRADING_MODEL`:
 
 ```bash
-node scripts/probe-model-schemas.mjs --live
+node --env-file=.env scripts/probe-model-schemas.mjs --live
 ```
 
 Without `--live`, the script makes no requests. The mock validates the serialized strict
-schema profile but cannot establish provider acceptance.
+schema profile but cannot establish provider acceptance. Omit `--env-file=.env` when
+the key and model settings are already exported in your shell.
 
 ## Code organization
 

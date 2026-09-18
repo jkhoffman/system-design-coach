@@ -1,8 +1,8 @@
 # Review remediation plan
 
-Based on [the branch review](../code-review-refactor-interview-lifecycle.md), reviewed against commit `fa930ea`. The seven implementation steps are now applied; see the disposition table in the review for code and test references. Live provider acceptance remains a separate opt-in verification. Keep the existing prompt content, model choices, interview URLs, atomic writes, and job fencing. Add a regression test with each repair and make separate, reviewable commits.
+Based on [the branch review](../code-review-refactor-interview-lifecycle.md), reviewed against commit `fa930ea`. The seven implementation steps are now applied, and the authorized live provider checks passed on 2026-09-17; see the disposition table in the review for code and test references. The original plan below preserves the existing prompt content, model choices, interview URLs, atomic writes, and job fencing, with regression tests and separate, reviewable commits.
 
-Findings 1–4 are merge blockers. Address all ten findings before declaring the review resolved. Finding 2 still needs live API verification; finding 9 warrants injected-failure tests even though the review did not demonstrate a production failure.
+Findings 1–4 were merge blockers. All ten findings are now addressed within the documented provider recovery limits. Finding 2 has passed live API verification; finding 9 has injected-failure tests even though the review did not demonstrate a production failure.
 
 1. **Make model schemas compatible with the API.** Finding 2.
 
@@ -95,4 +95,6 @@ Update the review with each finding's disposition, code/test references, and any
 
 **Implementation verification — 2026-09-17**
 
-All seven steps are implemented. Type checking, ESLint, 71 deterministic tests, the Webpack production build, and the full mock browser suite pass. Browser regressions cover failed SDP retry, stale-tab recovery, final-save conflict/export, legacy-grade replacement, ready audio without polling, and recording requests past the former client deadline. All provider calls in these checks use the local mock. The opt-in live schema probe remains unrun, and unknown provider session IDs require explicit reconciliation as documented in README.
+All seven steps are implemented. Type checking, ESLint, 71 deterministic tests, the Webpack production build, and the full mock browser suite pass. Browser regressions cover failed SDP retry, stale-tab recovery, final-save conflict/export, legacy-grade replacement, ready audio without polling, and recording requests past the former client deadline. All provider calls in those checks use the local mock.
+
+Separate authorized live verification also passed: both `prompt_spec` and `grade_report` were accepted and validated using the configured `gpt-5.6-terra` model. A short real `gpt-live-1` interview recovered from an injected SDP failure, received interviewer speech, saved a whiteboard checkpoint, received `session.closed`, released media resources, and produced a grade and playable, seekable recording. The retired first attempt's persisted cleanup state was `done`. This used synthetic input and an isolated data directory; it does not validate long-session behavior or interview quality. Unknown provider session IDs still require explicit reconciliation as documented in README.
