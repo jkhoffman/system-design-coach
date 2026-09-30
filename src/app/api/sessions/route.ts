@@ -6,7 +6,7 @@ import { toClientSession } from "@/lib/sessionDto";
 import { getGeneratedPrompt } from "@/lib/generatedPrompts";
 
 export async function GET() {
-  return Response.json({ sessions: listSessionSummaries(50) });
+  return Response.json({ sessions: listSessionSummaries(50) }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function POST(request: Request) {

@@ -30,7 +30,7 @@ function transport(events = {}, timing = {}) {
   return new GptLiveTransport("test-session", {
     onStatus() {}, onTranscript() {}, onStarted() {}, onUsageSeconds() {},
     onToolCall: async () => "{}", onEnded() {}, ...events,
-  }, { startupMs: 100, closeMs: 100, toolMs: 100, ...timing });
+  }, { startupMs: 100, closeMs: 100, toolMs: 100, appendMs: 100, ...timing });
 }
 
 test("microphone acquired after cancellation is stopped without creating a peer", async (t) => {
@@ -82,6 +82,21 @@ test("close acknowledgment has a deadline", async (t) => {
   await live.close();
   assert.equal(state.peerConnectionsClosed, 1);
   assert.ok(live.traceSnapshot().some((e) => e.type === "close.ack_timeout"));
+});
+
+test("append receipts correlate acknowledgements, rejection, and shutdown", async (t) => {
+  const state = browser(t, { omitAppendAck: true });
+  const live = transport({}, { appendMs: 1000 });
+  await live.connect();
+  const first = live.sendThinking("first");
+  const second = live.sendInstructions("second");
+  state.emit({ type: "session.instructions.appended", client_event_id: second.eventId, start_ms: 10, end_ms: 20 });
+  state.emit({ type: "error", error: { client_event_id: first.eventId, message: "rejected" } });
+  assert.deepEqual(await second.accepted, { outcome: "acknowledged", startMs: 10, endMs: 20 });
+  assert.deepEqual(await first.accepted, { outcome: "rejected", message: "rejected" });
+  const pending = live.sendCommentary("pending");
+  await live.close(false);
+  assert.deepEqual(await pending.accepted, { outcome: "unknown", message: "session closed before append acknowledgement" });
 });
 
 test("overlapping tools preserve result/image pairing and continue once, including duplicate events", async (t) => {

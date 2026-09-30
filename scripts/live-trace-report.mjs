@@ -53,6 +53,7 @@ if (session) {
 }
 console.log(`trace events: ${report.eventCount} (${report.counts.in} in / ${report.counts.out} out / ${report.counts.local} local)`);
 console.log(`trace duration: ${formatMs(report.durationMs)}`);
+if (report.voiceUsageSeconds != null) console.log(`provider voice usage: ${report.voiceUsageSeconds.toFixed(1)}s`);
 
 console.log("\nstages:");
 for (const stage of report.stages) {

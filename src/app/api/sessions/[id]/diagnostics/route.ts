@@ -12,5 +12,5 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
   return Response.json({
     session: session.session,
     analysis: analyzeLiveTrace(session.trace),
-  });
+  }, { headers: { "Cache-Control": "private, no-store" } });
 }

@@ -190,7 +190,12 @@ export async function serveRecording(file: string, request: Request): Promise<Re
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return Response.json({ error: "no recording" }, { status: 404 });
     throw error;
   }
-  const headers = { "Content-Type": "audio/wav", "Accept-Ranges": "bytes" };
+  const headers = {
+    "Content-Type": "audio/wav",
+    "Accept-Ranges": "bytes",
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+  };
   const range = request.headers.get("range");
   if (range) {
     const match = /^bytes=(\d*)-(\d*)$/.exec(range);

@@ -98,6 +98,8 @@ test("a stale download cannot overwrite the published recording; seeking and mis
   const responseRange = await artifacts.serveRecording(file, new Request("http://localhost", { headers: { range: "bytes=12-19" } }));
   assert.equal(responseRange.status, 206);
   assert.equal(responseRange.headers.get("content-range"), "bytes 12-19/48");
+  assert.equal(responseRange.headers.get("cache-control"), "private, no-store");
+  assert.equal(responseRange.headers.get("x-content-type-options"), "nosniff");
   assert.deepEqual(Buffer.from(await responseRange.arrayBuffer()), wav(2).subarray(12, 20));
   await fs.rm(file);
   assert.equal(await artifacts.availableRecording(id), null);

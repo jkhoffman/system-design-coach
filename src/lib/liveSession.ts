@@ -13,6 +13,17 @@ import { LiveActivity, parseLiveEvent, type LiveEvent } from "./liveProtocol";
 import type { Speaker } from "./types";
 
 export interface ToolResult { output: string; image?: { dataUrl: string; note: string } }
+export type AppendKind = "instructions" | "thinking" | "commentary";
+export type AppendOutcome =
+  | { outcome: "acknowledged"; startMs?: number; endMs?: number }
+  | { outcome: "rejected"; message: string }
+  | { outcome: "unknown"; message: string };
+export interface AppendReceipt {
+  eventId: string;
+  kind: AppendKind;
+  sent: boolean;
+  accepted: Promise<AppendOutcome>;
+}
 
 export interface LiveEvents {
   onStatus(status: "connecting" | "live" | "thinking" | "ended" | "error", detail?: string): void;
@@ -34,9 +45,9 @@ export interface LiveTransport {
   /** Whether the server allows live board images to be queued. */
   imagePushEnabled: boolean;
   connect(signal?: AbortSignal): Promise<void>;
-  sendThinking(content: string): void;
-  sendInstructions(content: string): void;
-  sendCommentary(content: string): void;
+  sendThinking(content: string): AppendReceipt;
+  sendInstructions(content: string): AppendReceipt;
+  sendCommentary(content: string): AppendReceipt;
   mute(): void;
   unmute(): void;
   close(graceful?: boolean): Promise<void>;
@@ -46,6 +57,7 @@ export interface LiveTransport {
 
 let counter = 0;
 const eid = (p: string) => `${p}_${Date.now().toString(36)}_${counter++}`;
+const MAX_APPEND_CHARS = 1600;
 
 export class GptLiveTransport implements LiveTransport {
   owner: SessionOwner | null = null;
@@ -71,12 +83,13 @@ export class GptLiveTransport implements LiveTransport {
   private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private closeWaiter: (() => void) | null = null;
   private trace = new LiveTrace();
+  private pendingAppends = new Map<string, { kind: AppendKind; settle: (outcome: AppendOutcome) => void; timer: ReturnType<typeof setTimeout> }>();
   imagePushEnabled = true;
 
   constructor(
     private sessionDbId: string,
     private ev: LiveEvents,
-    private timing = { startupMs: 60_000, closeMs: 10_000, toolMs: 10_000 }
+    private timing = { startupMs: 60_000, closeMs: 10_000, toolMs: 10_000, appendMs: 10_000 }
   ) {}
 
   sessionT0(): number | null {
@@ -100,6 +113,7 @@ export class GptLiveTransport implements LiveTransport {
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
+    this.trace.mark("connect.start");
     const startup = new AbortController();
     const timeout = setTimeout(() => startup.abort(new Error("Interviewer connection timed out")), this.timing.startupMs);
     const activeSignal = AbortSignal.any([this.lifetime.signal, startup.signal, ...(signal ? [signal] : [])]);
@@ -306,6 +320,7 @@ export class GptLiveTransport implements LiveTransport {
     this.trace.incoming(raw);
     const ev = parseLiveEvent(raw);
     if (!ev) return;
+    this.handleAppendEvent(ev);
     this.activity.observe(ev);
 
     switch (ev.type) {
@@ -351,6 +366,21 @@ export class GptLiveTransport implements LiveTransport {
         return;
       default:
         return;
+    }
+  }
+
+  private handleAppendEvent(ev: LiveEvent): void {
+    const clientEventId = ev.client_event_id ?? ev.error?.client_event_id;
+    if (!clientEventId) return;
+    const pending = this.pendingAppends.get(clientEventId);
+    if (!pending) {
+      if (ev.type.endsWith(".appended") || ev.type === "error") this.trace.mark("append.unmatched", clientEventId);
+      return;
+    }
+    if (ev.type === `session.${pending.kind}.appended`) {
+      pending.settle({ outcome: "acknowledged", startMs: ev.start_ms, endMs: ev.end_ms });
+    } else if (ev.type === "error") {
+      pending.settle({ outcome: "rejected", message: ev.error?.message ?? ev.message ?? "append rejected" });
     }
   }
 
@@ -407,31 +437,55 @@ export class GptLiveTransport implements LiveTransport {
     })();
   }
 
-  sendThinking(content: string): void {
-    this.send({
-      type: "session.thinking.append",
-      event_id: eid("thinking"),
-      delegation_id: null,
-      content,
-    });
+  private append(kind: AppendKind, content: string): AppendReceipt {
+    const eventId = eid(kind);
+    let settle!: (outcome: AppendOutcome) => void;
+    const accepted = new Promise<AppendOutcome>((resolve) => { settle = resolve; });
+    const finish = (outcome: AppendOutcome) => {
+      const pending = this.pendingAppends.get(eventId);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      this.pendingAppends.delete(eventId);
+      this.trace.mark(`append.${outcome.outcome}`, `${kind}:${eventId}`);
+      resolveOnce(outcome);
+    };
+    let resolved = false;
+    const resolveOnce = (outcome: AppendOutcome) => {
+      if (resolved) return;
+      resolved = true;
+      settle(outcome);
+    };
+    if (content.length > MAX_APPEND_CHARS) {
+      if (kind === "thinking") content = `${content.slice(0, MAX_APPEND_CHARS - 24)}\n[context truncated]`;
+      else {
+        const outcome = { outcome: "rejected" as const, message: "append exceeds the local content budget" };
+        this.trace.mark("append.rejected", `${kind}:${eventId}`);
+        resolveOnce(outcome);
+        return { eventId, kind, sent: false, accepted };
+      }
+    }
+    const sent = this.send({ type: `session.${kind}.append`, event_id: eventId, delegation_id: null, content });
+    if (!sent) {
+      const outcome = { outcome: "rejected" as const, message: "append was not sent" };
+      this.trace.mark("append.rejected", `${kind}:${eventId}`);
+      resolveOnce(outcome);
+    } else {
+      const timer = setTimeout(() => finish({ outcome: "unknown", message: "append acknowledgement timed out" }), this.timing.appendMs);
+      this.pendingAppends.set(eventId, { kind, settle: finish, timer });
+    }
+    return { eventId, kind, sent, accepted };
   }
 
-  sendInstructions(content: string): void {
-    this.send({
-      type: "session.instructions.append",
-      event_id: eid("instr"),
-      delegation_id: null,
-      content,
-    });
+  sendThinking(content: string): AppendReceipt {
+    return this.append("thinking", content);
   }
 
-  sendCommentary(content: string): void {
-    this.send({
-      type: "session.commentary.append",
-      event_id: eid("commentary"),
-      delegation_id: null,
-      content,
-    });
+  sendInstructions(content: string): AppendReceipt {
+    return this.append("instructions", content);
+  }
+
+  sendCommentary(content: string): AppendReceipt {
+    return this.append("commentary", content);
   }
 
   private sendBoardImage(dataUrl: string, note: string): void {
@@ -477,6 +531,9 @@ export class GptLiveTransport implements LiveTransport {
       try { cleanup(); } catch (error) { this.trace.mark("teardown.error", String(error)); }
     };
     safely(() => this.lifetime.abort());
+    for (const pending of this.pendingAppends.values()) {
+      pending.settle({ outcome: "unknown", message: "session closed before append acknowledgement" });
+    }
     safely(() => this.clearDisconnectTimer());
     this.cleanups.forEach(safely);
     this.cleanups.clear();

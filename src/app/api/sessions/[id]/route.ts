@@ -11,7 +11,7 @@ export async function GET(_request: Request, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   const session = findSession(id, getReviewSession);
   if (!session) return Response.json({ error: "not found" }, { status: 404 });
-  return Response.json({ session });
+  return Response.json({ session }, { headers: { "Cache-Control": "private, no-store" } });
 }
 
 export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {

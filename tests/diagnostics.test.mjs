@@ -14,6 +14,7 @@ test("diagnostics", () => {
   assert.equal(stageMs.continuation_to_response_completed, 3_500);
   assert.equal(stageMs.response_completed_to_interviewer_transcript, 2_500);
   assert.deepEqual(traceReport.appendLatencies.map((l) => l.durationMs), [500]);
+  assert.equal(traceReport.voiceUsageSeconds, 12.5);
   assert.equal(traceReport.turnGaps[0].durationMs, 13_000);
   assert(traceReport.gaps.some((g) => g.classification === "turn_taking"));
   assert(traceReport.gaps.some((g) => g.classification === "backend_response"));

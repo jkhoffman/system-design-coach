@@ -209,6 +209,10 @@ async function runHappyPath(context, baseUrl, mock, pageErrors) {
   assert.equal(mock.counts.gradeResponses, 1, "mock grading was not requested exactly once");
   assert.equal(mock.counts.recordingGet, 1, "mock recording was not downloaded exactly once");
   assert.ok(stub.getUserMediaCalls >= 1, "mock microphone was not acquired");
+  assert.equal(stub.sent.filter((message) => message.type === "session.instructions.append" && message.content?.includes("[opening instruction]")).length, 1,
+    "opening instruction was not sent exactly once");
+  assert.equal(stub.sent.filter((message) => message.type === "session.commentary.append").length, 0,
+    "opening unexpectedly used commentary instead of instructions");
   assert.ok(stub.boardSummaries >= 1, "board summary was not sent to the transport");
   assert.equal(stub.boardImages, 1, "routine board sync unexpectedly queued extra images");
   assert.ok(stub.toolCalls >= 1, "view_whiteboard tool call was not exercised");
