@@ -112,6 +112,7 @@ export function installLiveBrowserStub(options = {}) {
         hasImage:
           Array.isArray(content) && content.some((part) => part?.type === "input_image"),
         bytes: new TextEncoder().encode(raw).length,
+        content: message.content,
         at: performance.now(),
       });
 
@@ -120,8 +121,8 @@ export function installLiveBrowserStub(options = {}) {
         "session.thinking.append": "session.thinking.appended",
         "session.instructions.append": "session.instructions.appended",
       }[message.type];
-      if (appendAck) {
-        this.emit({ type: appendAck, event_id: message.event_id });
+      if (appendAck && !options.omitAppendAck) {
+        this.emit({ type: appendAck, client_event_id: message.event_id, start_ms: 0, end_ms: 1 });
       }
 
       if (message.type === "session.commentary.append") {
@@ -208,6 +209,28 @@ export function installLiveBrowserStub(options = {}) {
 
       if (message.type === "session.instructions.append") {
         state.instructions++;
+        if (String(message.content).includes("[opening instruction]")) {
+          this.emitTranscript(
+            "interviewer",
+            "Design a URL shortener that can support a large consumer product. ",
+            200,
+            1300
+          );
+          this.emitTranscript(
+            "interviewer",
+            "Start with the requirements you care about.",
+            1300,
+            2100
+          );
+          setTimeout(() => {
+            this.emitTranscript(
+              "candidate",
+              options.candidateText ?? "I will scope reads, writes, and durability first, then draw the core flow. ",
+              2400,
+              4300
+            );
+          }, options.candidateDelayMs ?? 50);
+        }
         return;
       }
 

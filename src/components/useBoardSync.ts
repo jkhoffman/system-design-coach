@@ -37,6 +37,7 @@ export function useBoardSync(input: {
   const lastVersionKey = useRef("");
   const pauseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const boardDirty = useRef(false);
+  const lastPublishedSummary = useRef("");
   const budget = useRef(new SnapshotBudget());
   const pendingTasks = useRef(new Set<Promise<void>>());
 
@@ -51,7 +52,10 @@ export function useBoardSync(input: {
     boardDirty.current = false;
     const t = sessionMs();
     const summary = summarizeScene(currentElements());
-    if (publishLive) transport.current.sendThinking(`[whiteboard state at ${fmtMs(t)}]\n${summary}`);
+    if (publishLive && summary !== lastPublishedSummary.current) {
+      const receipt = transport.current.sendThinking(`[whiteboard state at ${fmtMs(t)}]\n${summary}`);
+      if (receipt.sent) lastPublishedSummary.current = summary;
+    }
     timeline.current.addBoardSummary(t, summary);
 
     const signal = lifetime.current?.signal;

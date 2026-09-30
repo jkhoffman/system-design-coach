@@ -34,8 +34,10 @@ the walkthrough scenes, and failure diagnostics.
 - **Timeline**: transcript fragments (`session.input/output_transcript.delta`)
   are grouped into turns and merged with board summaries, phase markers, and
   snapshot references on the session's ms timeline. Every five active minutes, a
-  silent `[interview clock] elapsed MM:SS of MM:SS` context update is appended so
-  the interviewer can pace the conversation without guessing elapsed time.
+  silent `[interview clock] elapsed MM:SS of MM:SS` context update is appended.
+  Duration-aware clarification, architecture, deep-dive, coverage, and summary
+  milestones are delivered at quiet opportunities and tracked through their Live
+  append acknowledgements.
 - **Recording**: sessions are created with `store: true`; the stereo WAV
   (candidate left / interviewer right) is downloaded after the interview and
   served on the review page.
@@ -48,9 +50,11 @@ the walkthrough scenes, and failure diagnostics.
 
 Use Node.js **22.18 or newer**. The app uses Node's built-in SQLite module;
 tests and maintenance scripts also use its module registration hooks. No separate
-database server is required.
+database server is required. The repository's `.nvmrc` pins the version used by
+CI, so nvm users can select the same runtime with `nvm use`.
 
 ```bash
+nvm use
 npm install
 # create .env with:
 #   OPENAI_API_KEY=sk-...        (project needs GPT-Live access + session storage enabled)

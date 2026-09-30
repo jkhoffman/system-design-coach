@@ -36,6 +36,7 @@ export interface LiveTraceAnalysis {
   eventTypes: Record<string, number>;
   stages: LiveTraceStage[];
   appendLatencies: Array<{ type: string; durationMs: number; clientEventId?: string }>;
+  voiceUsageSeconds?: number;
   turnGaps: LiveTraceGap[];
   gaps: LiveTraceGap[];
   missingSignals: string[];
@@ -172,6 +173,11 @@ export function analyzeLiveTrace(
   const durationMs = sorted.length ? eventMs(sorted[sorted.length - 1]) - eventMs(sorted[0]) : 0;
 
   const firstDelegationIndex = sorted.findIndex((e) => e.type === "session.delegation.created");
+  const sessionStartedIndex = sorted.findIndex((e) => e.type === "session.started");
+  const sessionStarted = sessionStartedIndex >= 0 ? sorted[sessionStartedIndex] : undefined;
+  const firstInterviewer = sessionStarted
+    ? firstAfter(sorted, sessionStartedIndex, isInterviewerDelta)?.event
+    : undefined;
   const firstDelegation = firstDelegationIndex >= 0 ? sorted[firstDelegationIndex] : undefined;
   const nestedCreated = firstDelegation
     ? firstAfter(sorted, firstDelegationIndex, isNestedResponseCreated)?.event
@@ -213,6 +219,14 @@ export function analyzeLiveTrace(
   }
 
   const stages: LiveTraceStage[] = [
+    makeStage(
+      "session_started_to_first_interviewer_transcript",
+      sessionStarted,
+      firstInterviewer,
+      undefined,
+      undefined,
+      firstInterviewer ? eventStartMs(firstInterviewer) : undefined
+    ),
     makeStage(
       "candidate_end_to_delegation",
       lastCandidateBeforeDelegation,
@@ -324,6 +338,8 @@ export function analyzeLiveTrace(
   const missingSignals = expectedSignals
     .filter(([, predicate]) => !sorted.some((e) => predicate(e)))
     .map(([name]) => name);
+  const usage = [...sorted].reverse().find((event) => event.dir === "local" && event.type === "usage.voice_seconds");
+  const voiceUsageSeconds = usage?.detail === undefined ? undefined : Number(usage.detail);
 
   return {
     eventCount: sorted.length,
@@ -332,6 +348,7 @@ export function analyzeLiveTrace(
     eventTypes,
     stages,
     appendLatencies,
+    voiceUsageSeconds: Number.isFinite(voiceUsageSeconds) ? voiceUsageSeconds : undefined,
     turnGaps,
     gaps,
     missingSignals,

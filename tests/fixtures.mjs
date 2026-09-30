@@ -31,5 +31,6 @@ export const sampleTrace = [
   }),
   trace(11, "out", 15_000, "session.thinking.append", { clientEventId: "append_1", sent: true }),
   trace(12, "in", 15_500, "session.thinking.appended", { eventId: "append_1" }),
-  trace(13, "in", 16_000, "session.closed"),
+  trace(13, "local", 15_750, "usage.voice_seconds", { detail: "12.5" }),
+  trace(14, "in", 16_000, "session.closed"),
 ];

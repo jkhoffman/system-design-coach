@@ -32,7 +32,11 @@ export function useInterviewController(session: ClientSession) {
   const saving = useRef(false);
   const timeline = useRef(new Timeline());
   const t0 = useRef<number | null>(null);
-  const warnedAt = useRef(new Set<number>());
+  const deliveredMilestones = useRef(new Set<string>());
+  const dueMilestones = useRef(new Map<string, number>());
+  const milestoneAttempts = useRef(new Map<string, number>());
+  const pacingInFlight = useRef(false);
+  const lastTranscriptAt = useRef(0);
   const nextTimeContextAt = useRef(TIME_CONTEXT_INTERVAL_MS);
   const endedRef = useRef(false);
   const recoveryRequest = useRef<string | null>(null);
@@ -41,7 +45,7 @@ export function useInterviewController(session: ClientSession) {
   const onOwnershipLost = useCallback(() => lostOwnerHandler.current(), []);
   const owner = useCallback(() => transport.current?.owner ?? null, []);
   const finalPayload = useRef<FinalPayload | null>(null);
-  const pacingWarnings = useMemo(() => interviewPacing(session.durationSec).warnings, [session.durationSec]);
+  const pacing = useMemo(() => interviewPacing(session.durationSec), [session.durationSec]);
   const sessionMs = useCallback(() => t0.current == null ? 0 : performance.now() - t0.current, []);
   const { onWhiteboardChange, flushBoardUpdates } = useBoardSync({
     sessionId: session.id, transport, timeline, t0, sessionMs,
@@ -157,6 +161,12 @@ export function useInterviewController(session: ClientSession) {
     setError(null);
     setMuted(false);
     timeline.current.reset();
+    deliveredMilestones.current.clear();
+    dueMilestones.current.clear();
+    milestoneAttempts.current.clear();
+    pacingInFlight.current = false;
+    lastTranscriptAt.current = 0;
+    nextTimeContextAt.current = TIME_CONTEXT_INTERVAL_MS;
     t0.current = null;
     const signal = lifetime.current.signal;
     const t = new GptLiveTransport(session.id, {
@@ -171,12 +181,16 @@ export function useInterviewController(session: ClientSession) {
         t0.current = t.sessionT0() ?? performance.now();
         dispatch("connected");
         timeline.current.addMarker(0, `interview started (live session ${liveSessionId || "?"})`);
-        t.sendCommentary("The candidate has just joined the call. Greet them briefly and deliver the interview question now.");
+        const opening = t.sendInstructions("[opening instruction] Greet the candidate briefly, deliver the interview question now, invite clarifying questions, then pause and listen.");
+        void opening.accepted;
       },
       onTranscript(speaker, delta, startMs, endMs) {
-        if (!signal.aborted && !finalPayload.current) timeline.current.addTranscriptFragment(speaker, delta, startMs, endMs);
+        if (!signal.aborted && !finalPayload.current) {
+          lastTranscriptAt.current = performance.now();
+          timeline.current.addTranscriptFragment(speaker, delta, startMs, endMs);
+        }
       },
-      onUsageSeconds() {},
+      onUsageSeconds(sec) { t.markLocal("usage.voice_seconds", String(sec)); },
       async onToolCall(name, _args, toolSignal) {
         if (name !== "view_whiteboard") return JSON.stringify({ error: `unknown tool ${name}` });
         const summary = summarizeScene(board.currentElements());
@@ -225,17 +239,55 @@ export function useInterviewController(session: ClientSession) {
         nextTimeContextAt.current =
           (Math.floor(ms / TIME_CONTEXT_INTERVAL_MS) + 1) * TIME_CONTEXT_INTERVAL_MS;
       }
-      for (const warning of pacingWarnings) {
-        if (remain <= warning.remainingSec && !warnedAt.current.has(warning.remainingSec)) {
-          warnedAt.current.add(warning.remainingSec);
-          transport.current?.sendInstructions(warning.instruction);
-          timeline.current.addMarker(ms, warning.label);
+      const now = performance.now();
+      for (const milestone of pacing.milestones) {
+        if (ms / 1000 >= milestone.elapsedSec && !deliveredMilestones.current.has(milestone.id)) {
+          if (!dueMilestones.current.has(milestone.id)) transport.current?.markLocal("pacing.milestone.due", milestone.id);
+          dueMilestones.current.set(milestone.id, dueMilestones.current.get(milestone.id) ?? now);
+        }
+      }
+      const due = [...dueMilestones.current.entries()]
+        .map(([id, since]) => ({ milestone: pacing.milestones.find((item) => item.id === id)!, since }))
+        .filter(({ milestone }) => !deliveredMilestones.current.has(milestone.id));
+      if (!pacingInFlight.current && due.length) {
+        // Coalesce a background-tab timer jump to the latest still-useful phase.
+        const { milestone, since } = due.at(-1)!;
+        const quiet = now - lastTranscriptAt.current >= 1500;
+        if (quiet || now - since >= 15_000) {
+          for (const skipped of due.slice(0, -1)) {
+            deliveredMilestones.current.add(skipped.milestone.id);
+            dueMilestones.current.delete(skipped.milestone.id);
+            timeline.current.addMarker(ms, `${skipped.milestone.label} skipped after timer delay`);
+          }
+          const current = transport.current;
+          if (current) {
+            pacingInFlight.current = true;
+            const attempt = (milestoneAttempts.current.get(milestone.id) ?? 0) + 1;
+            milestoneAttempts.current.set(milestone.id, attempt);
+            current.markLocal("pacing.milestone.send", `${milestone.id}:${attempt}`);
+            const receipt = current.sendInstructions(`[interview phase] ${milestone.instruction}`);
+            if (!receipt.sent) pacingInFlight.current = false;
+            void receipt.accepted.then((outcome) => {
+              pacingInFlight.current = false;
+              current.markLocal(`pacing.milestone.${outcome.outcome}`, milestone.id);
+              if (endedRef.current) return;
+              if (outcome.outcome === "acknowledged" || outcome.outcome === "unknown") {
+                deliveredMilestones.current.add(milestone.id);
+                dueMilestones.current.delete(milestone.id);
+                timeline.current.addMarker(sessionMs(), milestone.label);
+              } else if (attempt >= 2) {
+                deliveredMilestones.current.add(milestone.id);
+                dueMilestones.current.delete(milestone.id);
+                timeline.current.addMarker(sessionMs(), `${milestone.label} delivery failed`);
+              }
+            });
+          }
         }
       }
       if (remain <= 0) void endInterview("time expired");
     }, 500);
     return () => clearInterval(iv);
-  }, [phase, session.durationSec, sessionMs, pacingWarnings, endInterview]);
+  }, [phase, session.durationSec, sessionMs, pacing, endInterview]);
 
 
   const toggleMute = () => {

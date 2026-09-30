@@ -1,6 +1,7 @@
 export interface LiveEvent {
   type: string;
   event_id?: string;
+  client_event_id?: string;
   delta?: string;
   start_ms?: number;
   end_ms?: number;
@@ -17,7 +18,7 @@ export interface LiveEvent {
     response?: { id?: string };
     item?: { type?: string; call_id?: string; name?: string; arguments?: string };
   };
-  error?: { message?: string };
+  error?: { message?: string; client_event_id?: string };
   message?: string;
 }
 

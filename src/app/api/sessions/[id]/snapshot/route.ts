@@ -24,5 +24,9 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   if (!validSessionId(id)) return Response.json({ error: "not found" }, { status: 404 });
   const image = await readSnapshot(id, new URL(request.url).searchParams.get("file") ?? "");
   if (!image) return Response.json({ error: "not found" }, { status: 404 });
-  return new Response(new Uint8Array(image), { headers: { "Content-Type": "image/png", "Cache-Control": "private, max-age=3600" } });
+  return new Response(new Uint8Array(image), { headers: {
+    "Content-Type": "image/png",
+    "Cache-Control": "private, no-store",
+    "X-Content-Type-Options": "nosniff",
+  } });
 }
