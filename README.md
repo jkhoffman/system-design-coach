@@ -4,12 +4,11 @@ Practicing system design alone means nobody answers your clarifying questions, c
 
 ## Install and run
 
-You need Node.js 22.18 or newer (`.nvmrc` pins the version CI uses) and an OpenAI API key.
+You need Node.js 22.18 or newer and an OpenAI API key. Check your Node version with `node --version`. If you use nvm, run `nvm use` in the clone to pick up the version in `.nvmrc`.
 
 ```bash
 git clone https://github.com/jkhoffman/system-design-coach.git
 cd system-design-coach
-nvm use
 npm ci
 echo "OPENAI_API_KEY=sk-..." > .env
 npm run dev
